@@ -11,23 +11,61 @@
 </head>
 <body>
   <header>
-    <div class="logo" role="img" aria-label="Crypto ChatPal logo">
+    <div class="logo" role="img" aria-label="Crypto ChatPal — friendly robot mascot">
       <svg class="logo-svg" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <defs>
-          <linearGradient id="logo-grad" x1="8" y1="8" x2="40" y2="40" gradientUnits="userSpaceOnUse">
-            <stop offset="0%" stop-color="#00d4aa" />
-            <stop offset="100%" stop-color="#00a884" />
-          </linearGradient>
-        </defs>
+        <!-- App tile -->
         <rect x="4" y="4" width="40" height="40" rx="11" fill="#161a22" stroke="#2a3142" stroke-width="1" />
-        <rect x="8" y="12" width="28" height="20" rx="6" fill="url(#logo-grad)" />
-        <polygon points="14,32 18,38 21,32" fill="url(#logo-grad)" />
-        <rect x="11" y="14.5" width="20" height="4" rx="2" fill="#ffffff" opacity="0.15" />
-        <circle cx="17" cy="22" r="2" fill="#0d0f14" />
-        <circle cx="24" cy="22" r="2" fill="#0d0f14" />
-        <circle cx="31" cy="22" r="2" fill="#0d0f14" />
-        <circle cx="35" cy="12" r="4.5" fill="#0d0f14" stroke="#00d4aa" stroke-width="1.2" />
-        <path d="M35 9.5v5M33.2 11h3.6" stroke="#00d4aa" stroke-width="1" stroke-linecap="round" />
+        <!-- Antenna -->
+        <line x1="24" y1="10.5" x2="24" y2="15" stroke="#f0f3f7" stroke-width="2" stroke-linecap="round" />
+        <circle cx="24" cy="8" r="3.2" fill="#ffffff" stroke="#5c6b7a" stroke-width="0.9" />
+        <circle cx="25" cy="7.1" r="0.9" fill="#d8dee6" opacity="0.9" />
+        <!-- Arms (waving pose) -->
+        <rect
+          x="6.5"
+          y="28"
+          width="5"
+          height="9"
+          rx="2.5"
+          fill="#ffffff"
+          stroke="#5c6b7a"
+          stroke-width="0.85"
+          transform="rotate(-12 9 32.5)"
+        />
+        <rect
+          x="36.5"
+          y="28"
+          width="5"
+          height="9"
+          rx="2.5"
+          fill="#ffffff"
+          stroke="#5c6b7a"
+          stroke-width="0.85"
+          transform="rotate(12 39 32.5)"
+        />
+        <!-- Head -->
+        <rect x="11" y="15" width="26" height="18" rx="8" fill="#ffffff" stroke="#5c6b7a" stroke-width="0.9" />
+        <rect x="13" y="17" width="22" height="4" rx="2" fill="#d5dde6" opacity="0.55" />
+        <!-- Eyes (read on white face) -->
+        <ellipse cx="18" cy="23" rx="3.2" ry="3.6" fill="#c8d4e0" stroke="#1e2a38" stroke-width="0.75" />
+        <ellipse cx="30" cy="23" rx="3.2" ry="3.6" fill="#c8d4e0" stroke="#1e2a38" stroke-width="0.75" />
+        <ellipse cx="18.8" cy="23.8" rx="1.9" ry="2.2" fill="#0d0f14" />
+        <ellipse cx="30.8" cy="23.8" rx="1.9" ry="2.2" fill="#0d0f14" />
+        <circle cx="19.5" cy="22.8" r="0.85" fill="#ffffff" opacity="0.95" />
+        <circle cx="31.5" cy="22.8" r="0.85" fill="#ffffff" opacity="0.95" />
+        <!-- Soft smile -->
+        <path
+          d="M 18.5 27.5 Q 24 31.5 29.5 27.5"
+          fill="none"
+          stroke="#1e2a38"
+          stroke-width="1.35"
+          stroke-linecap="round"
+        />
+        <!-- Body -->
+        <rect x="15" y="33" width="18" height="8" rx="3.5" fill="#ffffff" stroke="#5c6b7a" stroke-width="0.9" />
+        <rect x="17" y="35" width="14" height="2.2" rx="1" fill="#00d4aa" opacity="0.85" />
+        <!-- Tiny feet -->
+        <ellipse cx="19" cy="41.5" rx="2.2" ry="1.4" fill="#7a8694" />
+        <ellipse cx="29" cy="41.5" rx="2.2" ry="1.4" fill="#7a8694" />
       </svg>
     </div>
     <h1>Crypto ChatPal</h1>
@@ -75,8 +113,48 @@
     <aside class="side-column side-column--prices" aria-label="Live cryptocurrency prices">
       <section class="prices-panel" aria-label="Live prices">
         <div class="prices-header">
-          <h2>Live prices</h2>
+          <div class="prices-header-row">
+            <h2>Live prices</h2>
+            <button type="button" id="prices-edit-toggle" class="prices-edit-toggle" aria-expanded="false">
+              Edit list
+            </button>
+          </div>
           <span class="sub" id="prices-updated">Loading…</span>
+        </div>
+        <div id="prices-editor" class="prices-editor hidden" aria-hidden="true">
+          <p class="prices-editor-hint">
+            Reorder, remove, or add coins (CoinGecko IDs). Saved in this browser only.
+          </p>
+          <div id="prices-editor-rows" class="prices-editor-rows"></div>
+          <div class="prices-editor-add">
+            <label class="visually-hidden" for="prices-preset-select">Add from presets</label>
+            <select id="prices-preset-select" class="prices-select">
+              <option value="">Add from list…</option>
+            </select>
+            <button type="button" id="prices-add-preset" class="prices-btn">Add</button>
+          </div>
+          <div class="prices-editor-custom">
+            <label class="visually-hidden" for="prices-custom-id">CoinGecko id</label>
+            <input
+              type="text"
+              id="prices-custom-id"
+              class="prices-input"
+              placeholder="Custom id (e.g. chainlink)"
+              maxlength="64"
+              autocomplete="off"
+            />
+            <label class="visually-hidden" for="prices-custom-sym">Short label</label>
+            <input
+              type="text"
+              id="prices-custom-sym"
+              class="prices-input prices-input--sym"
+              placeholder="Label (e.g. LINK)"
+              maxlength="12"
+              autocomplete="off"
+            />
+            <button type="button" id="prices-add-custom" class="prices-btn">Add</button>
+          </div>
+          <button type="button" id="prices-reset-default" class="prices-reset-btn">Reset to default</button>
         </div>
         <div id="prices-error" class="hidden"></div>
         <div id="prices-list"></div>

@@ -66,7 +66,7 @@ async def _fetch_upstream() -> dict | None:
         "vs_currencies": "usd",
         "include_24hr_change": "true",
     }
-    headers = {"Accept": "application/json", "User-Agent": "CryptoDrug/1.0"}
+    headers = {"Accept": "application/json", "User-Agent": "CryptoChatPal/1.0"}
     async with httpx.AsyncClient(timeout=12.0) as client:
         r = await client.get(url, params=params, headers=headers)
         if r.status_code == 429:

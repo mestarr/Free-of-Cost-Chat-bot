@@ -1,6 +1,6 @@
-# Crypto drug
+# Crypto ChatPal
 
-A **free**, crypto-focused AI chatbot with a web UI and **live USD spot prices** (CoinGecko). The brain uses either **Groq** (free cloud, no local install) or **Ollama** (fully local).
+A **free**, crypto-focused AI chatbot with a web UI, **live USD spot prices** (CoinGecko), and **headlines from crypto RSS feeds** (CoinDesk, Decrypt, BeInCrypto). The brain uses either **Groq** (free cloud, no local install) or **Ollama** (fully local).
 
 ## What you need
 
@@ -11,11 +11,12 @@ A **free**, crypto-focused AI chatbot with a web UI and **live USD spot prices**
 
 | Path | Purpose |
 |------|---------|
-| `backend/main.py` | FastAPI app: `/api/chat`, `/api/prices`, serves static frontend |
-| `backend/prices.py` | CoinGecko live prices (cached ~60s), shared with chat context |
+| `backend/main.py` | FastAPI app: `/api/chat`, `/api/prices`, `/api/news`, serves static frontend |
+| `backend/prices.py` | CoinGecko live prices (cached), shared with chat context |
+| `backend/news.py` | RSS headline aggregation (cached), shared with chat context |
 | `frontend/index.html` | Page structure only |
 | `frontend/css/style.css` | Layout and visual design |
-| `frontend/js/app.js` | Chat + price panel behavior |
+| `frontend/js/app.js` | Chat + prices + news panel behavior |
 | `requirements.txt` | Python dependencies |
 | `.env` | Optional: `GROQ_API_KEY` (copy from `.env.example`) |
 
@@ -37,7 +38,7 @@ A **free**, crypto-focused AI chatbot with a web UI and **live USD spot prices**
    python -m uvicorn backend.main:app --reload
    ```
 
-4. Open **http://127.0.0.1:8000**. You should see the chat and the **Live prices** panel on the right (below the chat on narrow screens).
+4. Open **http://127.0.0.1:8000**. You should see the chat and the **Live prices** + **Latest news** column on the right (stacked below the chat on narrow screens).
 
 ## Quick start (Ollama – fully local)
 
@@ -53,6 +54,20 @@ A **free**, crypto-focused AI chatbot with a web UI and **live USD spot prices**
 
 - **Groq**: `GROQ_API_KEY` in `.env`; optional `GROQ_MODEL` (default `llama-3.1-8b-instant`).
 - **Ollama**: optional `OLLAMA_MODEL` (default `llama3.2`), `OLLAMA_URL` if Ollama runs elsewhere.
+- **News RSS**: optional `NEWS_CACHE_SECONDS` (default `300`), `NEWS_MAX_HEADLINES_LLM` (default `18`), `NEWS_USER_AGENT`.
+
+## Headlines (RSS)
+
+Default feeds (**crypto news**):
+
+- **[CoinDesk](https://www.coindesk.com/)** — `https://www.coindesk.com/arc/outboundfeeds/rss/`
+- **[Decrypt](https://decrypt.co/)** — `https://decrypt.co/feed`
+- **[BeInCrypto](https://beincrypto.com/)** — `https://beincrypto.com/feed/` (often returns **HTTP 403** to automated/server IPs; if so, that source contributes no items until it succeeds)
+
+- **`GET /api/news`** — JSON for the UI (cached).
+- **Chat** — each request includes a text snapshot of recent headlines (source + title + link + short snippet) so the model can discuss them **with attribution**.
+
+Sentiment labels in the UI are **rough keyword heuristics**, not financial analysis.
 
 ## Live prices
 
@@ -71,6 +86,6 @@ A **free**, crypto-focused AI chatbot with a web UI and **live USD spot prices**
 
 - Change **structure** in `frontend/index.html`.
 - Change **look** (colors, spacing, layout) in `frontend/css/style.css`.
-- Change **behavior** (chat, price refresh) in `frontend/js/app.js`.
+- Change **behavior** (chat, price refresh, news refresh) in `frontend/js/app.js`.
 
 After edits, refresh the browser; with `--reload`, the server restarts when Python files change.

@@ -46,6 +46,7 @@ body {
 .layout {
   flex: 1 1 auto;
   display: flex;
+  height: calc(100dvh - 77px);
   min-height: 0;
   overflow: hidden;
 }
@@ -73,6 +74,7 @@ header {
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 0.75rem;
 }
 
@@ -258,6 +260,7 @@ header h1 {
 .side-column {
   width: 300px;
   flex-shrink: 0;
+  height: 100%;
   background: var(--surface);
   display: flex;
   flex-direction: column;
@@ -276,6 +279,7 @@ header h1 {
 .side-column .news-panel,
 .side-column .prices-panel {
   flex: 1 1 auto;
+  height: 100%;
   min-height: 0;
   overflow: hidden;
   display: flex;
@@ -328,6 +332,122 @@ header h1 {
 .prices-edit-toggle:hover {
   border-color: var(--accent);
   background: rgba(0, 212, 170, 0.08);
+}
+
+.macro-top {
+  border-bottom: 1px solid var(--border);
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.macro-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.macro-card--fed-left {
+  margin: 0.45rem 0.45rem 0.25rem;
+  flex-shrink: 0;
+}
+
+.macro-card--fed-left #fed-list {
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.macro-card-head {
+  padding: 0.45rem 0.55rem 0.35rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.macro-card-head h3 {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+#oil-list,
+#fed-list {
+  padding: 0.35rem 0.45rem 0.4rem;
+}
+
+.oil-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.15rem 0.35rem;
+  padding: 0.32rem 0.2rem;
+  border-radius: 6px;
+}
+
+.oil-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.oil-row .label {
+  font-size: 0.73rem;
+  font-weight: 600;
+}
+
+.oil-row .usd {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+}
+
+.oil-row .chg {
+  grid-column: 1 / -1;
+  font-size: 0.68rem;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+#oil-error,
+#fed-error {
+  padding: 0.35rem 0.55rem 0;
+  font-size: 0.68rem;
+  color: #f0a0a0;
+}
+
+#oil-error.hidden,
+#fed-error.hidden {
+  display: none;
+}
+
+.fed-item {
+  padding: 0.32rem 0.2rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.fed-item:last-child {
+  border-bottom: none;
+}
+
+.fed-item a {
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+.fed-item a:hover {
+  text-decoration: underline;
+}
+
+.fed-time {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.64rem;
+  color: var(--muted);
+  margin-top: 0.16rem;
 }
 
 .prices-editor {
@@ -728,6 +848,7 @@ header h1 {
   .layout {
     flex-direction: column;
     flex: 1 1 auto;
+    height: auto;
     min-height: 0;
     overflow: visible;
   }

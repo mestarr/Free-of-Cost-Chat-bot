@@ -18,6 +18,12 @@
   const pricesCustomSym = document.getElementById('prices-custom-sym');
   const pricesAddCustom = document.getElementById('prices-add-custom');
   const pricesResetDefault = document.getElementById('prices-reset-default');
+  const oilList = document.getElementById('oil-list');
+  const oilUpdated = document.getElementById('oil-updated');
+  const oilError = document.getElementById('oil-error');
+  const fedList = document.getElementById('fed-list');
+  const fedUpdated = document.getElementById('fed-updated');
+  const fedError = document.getElementById('fed-error');
 
   const PRICE_STORAGE_KEY = 'cryptochatpal_price_rows';
   const MAX_PRICE_ROWS = 30;
@@ -314,7 +320,114 @@
   }
 
   loadPrices();
-  setInterval(loadPrices, 1000);
+  setInterval(loadPrices, 60000);
+
+  function formatUtcLabel(ts) {
+    if (!ts) return '';
+    const d = Date.parse(ts);
+    if (Number.isNaN(d)) return '';
+    return new Date(d).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+
+  function renderOil(data) {
+    if (!oilList || !oilUpdated || !oilError) return;
+    oilError.classList.add('hidden');
+    const items = data.items || [];
+    oilList.innerHTML = '';
+    if (!items.length) {
+      const p = document.createElement('div');
+      p.className = 'news-snippet';
+      p.textContent = 'No oil quote data right now.';
+      oilList.appendChild(p);
+      oilUpdated.textContent = '';
+      return;
+    }
+    for (const it of items) {
+      const ch = it.change_pct;
+      const chClass = ch > 0 ? 'up' : ch < 0 ? 'down' : 'neutral';
+      const chText = ch == null || Number.isNaN(ch) ? '24h —' : `24h ${ch >= 0 ? '+' : ''}${ch.toFixed(2)}%`;
+      const row = document.createElement('div');
+      row.className = 'oil-row';
+      row.innerHTML = `
+        <span class="label">${escapeHtml(it.label || it.symbol || 'Oil')}</span>
+        <span class="usd">${formatUsd(it.usd)}</span>
+        <span class="chg ${chClass}">${chText}</span>`;
+      oilList.appendChild(row);
+    }
+    const stamp = formatUtcLabel(data.fetched_at);
+    oilUpdated.textContent = stamp ? `Updated · ${stamp}` : 'Updated';
+  }
+
+  async function loadOil() {
+    if (!oilList) return;
+    try {
+      const res = await fetch('/api/markets/oil');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const d = data.detail;
+        const msg =
+          typeof d === 'string' ? d : (d && JSON.stringify(d)) || res.statusText || 'Failed';
+        throw new Error(msg);
+      }
+      renderOil(data);
+    } catch (e) {
+      oilError.textContent = 'Could not load oil prices.';
+      oilError.classList.remove('hidden');
+      oilUpdated.textContent = '';
+    }
+  }
+
+  function renderFedNews(data) {
+    if (!fedList || !fedUpdated || !fedError) return;
+    fedError.classList.add('hidden');
+    const items = data.items || [];
+    fedList.innerHTML = '';
+    if (!items.length) {
+      const p = document.createElement('div');
+      p.className = 'news-snippet';
+      p.textContent = 'No Federal Reserve rate-cut headlines right now.';
+      fedList.appendChild(p);
+      fedUpdated.textContent = '';
+      return;
+    }
+    for (const it of items.slice(0, 4)) {
+      const el = document.createElement('div');
+      el.className = 'fed-item';
+      const href = it.link && /^https?:\/\//i.test(it.link) ? it.link : '#';
+      const t = it.title || 'Untitled';
+      const when = formatNewsTime(it.published);
+      el.innerHTML = `
+        <a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t)}</a>
+        <div class="fed-time">${escapeHtml(when)}</div>`;
+      fedList.appendChild(el);
+    }
+    const stamp = formatUtcLabel(data.fetched_at);
+    fedUpdated.textContent = stamp ? `Updated · ${stamp}` : 'Updated';
+  }
+
+  async function loadFedNews() {
+    if (!fedList) return;
+    try {
+      const res = await fetch('/api/news/fed');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const d = data.detail;
+        const msg =
+          typeof d === 'string' ? d : (d && JSON.stringify(d)) || res.statusText || 'Failed';
+        throw new Error(msg);
+      }
+      renderFedNews(data);
+    } catch (e) {
+      fedError.textContent = 'Could not load Federal Reserve news.';
+      fedError.classList.remove('hidden');
+      fedUpdated.textContent = '';
+    }
+  }
+
+  loadOil();
+  loadFedNews();
+  setInterval(loadOil, 300000);
+  setInterval(loadFedNews, 300000);
 
   function formatNewsTime(pub) {
     if (!pub) return '';

@@ -85,6 +85,14 @@
         </div>
         <div class="news-today">Today</div>
         <div id="news-error" class="hidden"></div>
+        <section class="macro-card macro-card--fed-left" aria-label="Federal Reserve news">
+          <div class="macro-card-head">
+            <h3>Federal Reserve news</h3>
+            <span id="fed-updated" class="sub">Loading…</span>
+          </div>
+          <div id="fed-error" class="hidden"></div>
+          <div id="fed-list"></div>
+        </section>
         <div id="news-list"></div>
       </section>
     </aside>
@@ -120,6 +128,16 @@
             </button>
           </div>
           <span class="sub" id="prices-updated">Loading…</span>
+        </div>
+        <div class="macro-top" aria-label="Macro indicators">
+          <section class="macro-card" aria-label="Commodities prices">
+            <div class="macro-card-head">
+              <h3>Commodities prices</h3>
+              <span id="oil-updated" class="sub">Loading…</span>
+            </div>
+            <div id="oil-error" class="hidden"></div>
+            <div id="oil-list"></div>
+          </section>
         </div>
         <div id="prices-editor" class="prices-editor hidden" aria-hidden="true">
           <p class="prices-editor-hint">
@@ -162,6 +180,6 @@
     </aside>
   </div>
 
-  <script src="js/app.js" defer></script>
+  <script src="js/app.js?v=20260326-3" defer></script>
 </body>
 </html>

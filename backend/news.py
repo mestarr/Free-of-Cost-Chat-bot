@@ -30,11 +30,17 @@ DEFAULT_FEEDS: list[tuple[str, str, int]] = [
     ("Decrypt", "https://decrypt.co/feed", 14),
     ("BeInCrypto", "https://beincrypto.com/feed/", 12),
 ]
+FED_FEEDS: list[tuple[str, str, int]] = [
+    ("Federal Reserve", "https://www.federalreserve.gov/feeds/press_all.xml", 10),
+    ("Federal Reserve", "https://www.federalreserve.gov/feeds/speeches.xml", 8),
+]
 
 TTL_SECONDS = float(os.getenv("NEWS_CACHE_SECONDS", "300"))
+FED_TTL_SECONDS = float(os.getenv("FED_NEWS_CACHE_SECONDS", "300"))
 MAX_HEADLINES_LLM = int(os.getenv("NEWS_MAX_HEADLINES_LLM", "18"))
 
 _cache: dict[str, Any] = {"ts": 0.0, "items": [], "fetched_at": ""}
+_fed_cache: dict[str, Any] = {"ts": 0.0, "items": [], "fetched_at": ""}
 
 _POS = re.compile(
     r"\b(surge|surges|rally|rallies|gain|gains|rise|rose|risen|jump|jumps|record|high|approve|approved|"
@@ -45,6 +51,11 @@ _NEG = re.compile(
     r"\b(ban|banned|hack|hacked|fraud|scam|crash|selloff|sell-off|drop|drops|fall|falls|plunge|loss|losses|"
     r"lawsuit|crime|exploit|warning|crisis|layoff|layoffs|cuts|war|attack|death|banned|violation|"
     r"ponzi|charges|arrest|penalty)\b",
+    re.I,
+)
+_FED_CUT = re.compile(
+    r"\b(rate cut|rates cut|cut rates|cut interest rates|interest rate cut|"
+    r"policy easing|easing cycle|lower rates|rate reduction|reduce rates|pivot)\b",
     re.I,
 )
 
@@ -206,3 +217,39 @@ async def fetch_news_snapshot_for_llm() -> str:
         else:
             lines.append(f"- [{src}] {t} — {link}")
     return "\n".join(lines)
+
+
+async def get_fed_news_items() -> list[dict[str, Any]]:
+    now = time.time()
+    if _fed_cache["items"] and (now - _fed_cache["ts"]) < FED_TTL_SECONDS:
+        return _fed_cache["items"]
+
+    merged: list[dict[str, Any]] = []
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+        for source, url, cap in FED_FEEDS:
+            merged.extend(await _fetch_feed(client, source, url, cap))
+
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for it in sorted(merged, key=lambda x: x.get("published_ts") or 0, reverse=True):
+        blob = f'{it.get("title", "")} {it.get("summary", "")}'
+        if not _FED_CUT.search(blob):
+            continue
+        key = _norm_link(it["link"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(it)
+
+    _fed_cache["ts"] = now
+    _fed_cache["items"] = deduped
+    _fed_cache["fetched_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return deduped
+
+
+async def get_fed_news_api_payload(limit: int = 8) -> dict[str, Any]:
+    items = await get_fed_news_items()
+    return {
+        "fetched_at": _fed_cache.get("fetched_at") or "",
+        "items": items[:limit],
+    }

@@ -95,6 +95,12 @@ Sentiment labels in the UI are **rough keyword heuristics**, not financial analy
 - Use the **Light** and **Dark** buttons in the page header to switch themes.
 - The choice is saved in the browser (`localStorage` key `cryptochatpal_theme`) and applied on the next visit.
 
+## Session desk
+
+- Open **Session desk** from the chat toolbar for a **Market pulse** (0–100): a blend of your **watchlist** 24h volatility and **RSS headline** sentiment counts from the left column.
+- **Stance log**: when the assistant replies using the structured trade format (lines like `View:`, `Confidence:`, `Score:`), those fields are parsed and appended automatically (stored in `localStorage` under `cryptochatpal_stance_ledger`, last 24 entries).
+- **Export snapshot** downloads a JSON file with the current pulse readout and stance log (handy for journaling or sharing what the UI “saw” in that session).
+
 ## Editing the UI
 
 - Change **structure** in `frontend/index.html`.

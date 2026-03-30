@@ -3,6 +3,10 @@
   const form = document.getElementById('form');
   const input = document.getElementById('input');
   const sendBtn = document.getElementById('send');
+  const chatFileInput = document.getElementById('chat-file-input');
+  const chatAttachChips = document.getElementById('chat-attach-chips');
+  const chatAttachBtn = document.getElementById('chat-attach');
+  const chatAttachStatus = document.getElementById('chat-attach-status');
   const pricesList = document.getElementById('prices-list');
   const pricesUpdated = document.getElementById('prices-updated');
   const pricesError = document.getElementById('prices-error');
@@ -24,9 +28,159 @@
   const fedList = document.getElementById('fed-list');
   const fedUpdated = document.getElementById('fed-updated');
   const fedError = document.getElementById('fed-error');
+  const themeLightBtn = document.getElementById('theme-light');
+  const themeDarkBtn = document.getElementById('theme-dark');
 
   const PRICE_STORAGE_KEY = 'cryptochatpal_price_rows';
+  const THEME_KEY = 'cryptochatpal_theme';
+
+  function getTheme() {
+    return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  }
+
+  function syncThemeButtons() {
+    const light = getTheme() === 'light';
+    if (themeLightBtn) {
+      themeLightBtn.classList.toggle('theme-btn--active', light);
+      themeLightBtn.setAttribute('aria-pressed', light ? 'true' : 'false');
+    }
+    if (themeDarkBtn) {
+      themeDarkBtn.classList.toggle('theme-btn--active', !light);
+      themeDarkBtn.setAttribute('aria-pressed', !light ? 'true' : 'false');
+    }
+  }
+
+  function applyTheme(mode) {
+    if (mode === 'light') {
+      document.documentElement.setAttribute('data-theme', 'light');
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+    try {
+      localStorage.setItem(THEME_KEY, mode);
+    } catch (e) {}
+    syncThemeButtons();
+  }
+
+  if (themeLightBtn) themeLightBtn.addEventListener('click', () => applyTheme('light'));
+  if (themeDarkBtn) themeDarkBtn.addEventListener('click', () => applyTheme('dark'));
+  syncThemeButtons();
+
   const MAX_PRICE_ROWS = 30;
+
+  const ATTACH_MAX_FILES = 5;
+  const ATTACH_MAX_BYTES = 256 * 1024;
+  const ATTACH_NAME_RE = /\.(md|txt|csv|json|log)$/i;
+
+  let pendingAttachments = [];
+
+  function isAllowedTextFile(file) {
+    if (ATTACH_NAME_RE.test(file.name)) return true;
+    const t = (file.type || '').toLowerCase();
+    return t.startsWith('text/') || t === 'application/json';
+  }
+
+  function uniqueAttachName(name) {
+    const names = new Set(pendingAttachments.map((a) => a.name));
+    if (!names.has(name)) return name;
+    const m = name.match(/^(.+)(\.[^.]+)$/);
+    const base = m ? m[1] : name;
+    const ext = m ? m[2] : '';
+    let n = 2;
+    let candidate = `${base} (${n})${ext}`;
+    while (names.has(candidate)) {
+      n += 1;
+      candidate = `${base} (${n})${ext}`;
+    }
+    return candidate;
+  }
+
+  function readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result || ''));
+      r.onerror = () => reject(new Error('read failed'));
+      r.readAsText(file);
+    });
+  }
+
+  function mergeAttachmentsForApi(text, attachments) {
+    const parts = [];
+    const t = text.trim();
+    if (t) parts.push(t);
+    if (attachments.length) {
+      parts.push('--- Attached files ---');
+      for (const a of attachments) {
+        parts.push(`### ${a.name}\n${a.content}`);
+      }
+    }
+    return parts.join('\n\n');
+  }
+
+  function setAttachStatus(msg) {
+    if (!chatAttachStatus) return;
+    if (!msg) {
+      chatAttachStatus.textContent = '';
+      chatAttachStatus.classList.add('visually-hidden');
+    } else {
+      chatAttachStatus.textContent = msg;
+      chatAttachStatus.classList.remove('visually-hidden');
+    }
+  }
+
+  function renderAttachChips() {
+    if (!chatAttachChips) return;
+    chatAttachChips.innerHTML = '';
+    pendingAttachments.forEach((a) => {
+      const wrap = document.createElement('span');
+      wrap.className = 'chat-attach-chip';
+      const label = document.createElement('span');
+      label.textContent = a.name;
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.setAttribute('aria-label', `Remove ${a.name}`);
+      rm.textContent = '×';
+      rm.addEventListener('click', () => {
+        pendingAttachments = pendingAttachments.filter((x) => x.name !== a.name);
+        renderAttachChips();
+      });
+      wrap.appendChild(label);
+      wrap.appendChild(rm);
+      chatAttachChips.appendChild(wrap);
+    });
+    if (pendingAttachments.length) chatAttachChips.classList.remove('hidden');
+    else chatAttachChips.classList.add('hidden');
+  }
+
+  async function handleFilesSelected(fileList) {
+    setAttachStatus('');
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    const errors = [];
+    for (const file of files) {
+      if (pendingAttachments.length >= ATTACH_MAX_FILES) {
+        errors.push(`At most ${ATTACH_MAX_FILES} files.`);
+        break;
+      }
+      if (!isAllowedTextFile(file)) {
+        errors.push(`Skipped (not a supported text file): ${file.name}`);
+        continue;
+      }
+      if (file.size > ATTACH_MAX_BYTES) {
+        errors.push(`Too large (max ${ATTACH_MAX_BYTES / 1024} KB): ${file.name}`);
+        continue;
+      }
+      try {
+        const content = await readFileAsText(file);
+        pendingAttachments.push({ name: uniqueAttachName(file.name), content });
+      } catch {
+        errors.push(`Could not read: ${file.name}`);
+      }
+    }
+    if (errors.length) setAttachStatus(errors[0]);
+    renderAttachChips();
+    if (chatFileInput) chatFileInput.value = '';
+  }
 
   const DEFAULT_PRICE_ROWS = [
     { id: 'bitcoin', sym: 'BTC' },
@@ -129,7 +283,198 @@
   let lastPricesPayload = {};
   let lastRenderKey = '';
 
+  const SESSIONS_STORE_KEY = 'cryptochatpal_sessions';
+  const ACTIVE_SESSION_KEY = 'cryptochatpal_active_session';
+  const LEGACY_CHAT_KEY = 'cryptochatpal_conversation';
+  const MAX_SESSIONS = 25;
+  const MAX_CHAT_MESSAGES = 30;
+
+  let chatSessions = [];
+  let activeSessionId = '';
   let conversation = [];
+
+  function makeSessionId() {
+    return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+  }
+
+  function cleanMessageList(arr) {
+    const cleaned = [];
+    if (!Array.isArray(arr)) return cleaned;
+    for (const m of arr) {
+      if (!m || typeof m !== 'object') continue;
+      const role = m.role;
+      const content = m.content;
+      if ((role !== 'user' && role !== 'assistant') || typeof content !== 'string') continue;
+      const text = content.trim();
+      if (!text) continue;
+      cleaned.push({ role, content: text });
+    }
+    return cleaned.slice(-MAX_CHAT_MESSAGES);
+  }
+
+  function loadLegacyConversation() {
+    try {
+      const raw = localStorage.getItem(LEGACY_CHAT_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return cleanMessageList(parsed);
+    } catch {
+      return [];
+    }
+  }
+
+  function initChatSessions() {
+    let sessions = [];
+    try {
+      const raw = localStorage.getItem(SESSIONS_STORE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          sessions = parsed.filter(
+            (s) => s && typeof s === 'object' && typeof s.id === 'string' && Array.isArray(s.messages)
+          );
+        }
+      }
+    } catch {
+      sessions = [];
+    }
+    if (!sessions.length) {
+      const legacy = loadLegacyConversation();
+      if (legacy.length) {
+        sessions.push({
+          id: makeSessionId(),
+          title: 'Saved chat',
+          updatedAt: Date.now(),
+          messages: legacy,
+        });
+      } else {
+        sessions.push({ id: makeSessionId(), title: 'Chat 1', updatedAt: Date.now(), messages: [] });
+      }
+    }
+    for (const s of sessions) {
+      s.messages = cleanMessageList(s.messages);
+      if (typeof s.title !== 'string' || !s.title.trim()) s.title = 'Chat';
+      if (typeof s.updatedAt !== 'number') s.updatedAt = Date.now();
+    }
+    let activeId = localStorage.getItem(ACTIVE_SESSION_KEY);
+    if (!sessions.some((s) => s.id === activeId)) activeId = sessions[0].id;
+    chatSessions = sessions.slice(0, MAX_SESSIONS);
+    activeSessionId = activeId;
+    const act = chatSessions.find((s) => s.id === activeSessionId) || chatSessions[0];
+    activeSessionId = act.id;
+    conversation = act.messages;
+    return conversation;
+  }
+
+  initChatSessions();
+
+  function persistChatSessions() {
+    const act = chatSessions.find((s) => s.id === activeSessionId);
+    if (act) {
+      act.messages = cleanMessageList(act.messages);
+      act.updatedAt = Date.now();
+    }
+    try {
+      localStorage.setItem(SESSIONS_STORE_KEY, JSON.stringify(chatSessions));
+      localStorage.setItem(ACTIVE_SESSION_KEY, activeSessionId);
+      if (act) {
+        localStorage.setItem(LEGACY_CHAT_KEY, JSON.stringify(act.messages.slice(-MAX_CHAT_MESSAGES)));
+      }
+    } catch {
+      /* ignore quota */
+    }
+  }
+
+  function formatChatDate(ts) {
+    if (!ts) return '';
+    return new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function renderConversation(rows) {
+    messagesEl.innerHTML = '';
+    if (!rows?.length) return;
+    for (const m of rows) {
+      addMessage(m.role, m.content);
+    }
+  }
+
+  function renderHistoryList() {
+    const listEl = document.getElementById('chat-history-list');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    const sorted = [...chatSessions].sort((a, b) => b.updatedAt - a.updatedAt);
+    for (const s of sorted) {
+      const row = document.createElement('div');
+      row.className = 'chat-history-row';
+
+      const main = document.createElement('button');
+      main.type = 'button';
+      main.className = 'chat-history-item' + (s.id === activeSessionId ? ' active' : '');
+      main.innerHTML = `<span class="chat-history-title">${escapeHtml(s.title)}</span><span class="chat-history-date">${escapeHtml(formatChatDate(s.updatedAt))}</span>`;
+      main.addEventListener('click', () => {
+        switchSession(s.id);
+        const panel = document.getElementById('chat-history-panel');
+        const toggle = document.getElementById('chat-history-toggle');
+        if (panel) {
+          panel.classList.add('hidden');
+          panel.setAttribute('aria-hidden', 'true');
+        }
+        if (toggle) toggle.setAttribute('aria-expanded', 'false');
+      });
+
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'chat-history-del';
+      del.setAttribute('aria-label', 'Delete chat');
+      del.textContent = '×';
+      del.addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteSession(s.id);
+      });
+
+      row.appendChild(main);
+      row.appendChild(del);
+      listEl.appendChild(row);
+    }
+  }
+
+  function switchSession(id) {
+    if (id === activeSessionId) return;
+    const s = chatSessions.find((x) => x.id === id);
+    if (!s) return;
+    activeSessionId = id;
+    conversation = s.messages;
+    renderConversation(conversation);
+    persistChatSessions();
+    renderHistoryList();
+  }
+
+  function newChatSession() {
+    const id = makeSessionId();
+    const n = chatSessions.length + 1;
+    chatSessions.unshift({ id, title: 'Chat ' + n, updatedAt: Date.now(), messages: [] });
+    if (chatSessions.length > MAX_SESSIONS) chatSessions.pop();
+    activeSessionId = id;
+    conversation = chatSessions.find((x) => x.id === id).messages;
+    messagesEl.innerHTML = '';
+    persistChatSessions();
+    renderHistoryList();
+  }
+
+  function deleteSession(id) {
+    if (chatSessions.length <= 1) return;
+    const idx = chatSessions.findIndex((s) => s.id === id);
+    if (idx < 0) return;
+    chatSessions.splice(idx, 1);
+    if (activeSessionId === id) {
+      activeSessionId = chatSessions[0].id;
+      conversation = chatSessions[0].messages;
+      renderConversation(conversation);
+    }
+    persistChatSessions();
+    renderHistoryList();
+  }
 
   function formatUsd(n) {
     if (n == null || Number.isNaN(n)) return '—';
@@ -575,24 +920,54 @@
     else content.classList.remove('typing');
   }
 
+  if (chatAttachBtn && chatFileInput) {
+    chatAttachBtn.addEventListener('click', () => chatFileInput.click());
+    chatFileInput.addEventListener('change', () => handleFilesSelected(chatFileInput.files));
+  }
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const text = input.value.trim();
-    if (!text) return;
+    if (!text && !pendingAttachments.length) return;
+
+    const names = pendingAttachments.map((a) => a.name);
+    const storedUserContent = text
+      ? names.length
+        ? `${text}\n\n(Attached: ${names.join(', ')})`
+        : text
+      : names.length
+        ? `(Attached: ${names.join(', ')})`
+        : '';
+    const displayUser = text
+      ? names.length
+        ? `${text}\n\n📎 ${names.join(', ')}`
+        : text
+      : names.length
+        ? `📎 ${names.join(', ')}`
+        : '';
+    const snapshot = pendingAttachments.map((a) => ({ name: a.name, content: a.content }));
+    const apiUserContent = mergeAttachmentsForApi(text, snapshot);
 
     input.value = '';
-    addMessage('user', text);
-    conversation.push({ role: 'user', content: text });
+    addMessage('user', displayUser);
+    conversation.push({ role: 'user', content: storedUserContent });
+    persistChatSessions();
+
+    const messagesForApi = [
+      ...conversation.slice(0, -1),
+      { role: 'user', content: apiUserContent },
+    ];
 
     const botDiv = addMessage('assistant', '');
     setTyping(botDiv, true);
     sendBtn.disabled = true;
+    if (chatAttachBtn) chatAttachBtn.disabled = true;
 
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: conversation }),
+        body: JSON.stringify({ messages: messagesForApi }),
       });
       const data = await res.json().catch(() => ({}));
       setTyping(botDiv, false);
@@ -607,6 +982,10 @@
       const reply = data.message || '';
       botDiv.querySelector('.content').innerHTML = formatContent(reply);
       conversation.push({ role: 'assistant', content: reply });
+      persistChatSessions();
+      pendingAttachments = [];
+      renderAttachChips();
+      setAttachStatus('');
     } catch (err) {
       setTyping(botDiv, false);
       botDiv.querySelector('.content').innerHTML = formatContent(
@@ -615,6 +994,7 @@
       botDiv.classList.add('error');
     } finally {
       sendBtn.disabled = false;
+      if (chatAttachBtn) chatAttachBtn.disabled = false;
     }
   });
 
@@ -628,4 +1008,63 @@
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 160) + 'px';
   });
+
+  const chatSaveBtn = document.getElementById('chat-save');
+  const chatNewBtn = document.getElementById('chat-new');
+  const chatHistoryToggle = document.getElementById('chat-history-toggle');
+  const chatHistoryPanel = document.getElementById('chat-history-panel');
+  const chatSaveStatus = document.getElementById('chat-save-status');
+
+  if (chatSaveBtn) {
+    chatSaveBtn.addEventListener('click', () => {
+      const s = chatSessions.find((x) => x.id === activeSessionId);
+      if (!s) return;
+      const name = prompt('Name this chat (optional)', s.title || '');
+      if (name === null) return;
+      if (name.trim()) s.title = name.trim();
+      s.updatedAt = Date.now();
+      persistChatSessions();
+      renderHistoryList();
+      if (chatSaveStatus) {
+        chatSaveStatus.textContent = 'Saved';
+        setTimeout(() => {
+          chatSaveStatus.textContent = '';
+        }, 2000);
+      }
+    });
+  }
+
+  if (chatNewBtn) {
+    chatNewBtn.addEventListener('click', () => newChatSession());
+  }
+
+  if (chatHistoryToggle && chatHistoryPanel) {
+    chatHistoryToggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const hidden = chatHistoryPanel.classList.contains('hidden');
+      if (hidden) {
+        chatHistoryPanel.classList.remove('hidden');
+        chatHistoryToggle.setAttribute('aria-expanded', 'true');
+        chatHistoryPanel.setAttribute('aria-hidden', 'false');
+        renderHistoryList();
+      } else {
+        chatHistoryPanel.classList.add('hidden');
+        chatHistoryToggle.setAttribute('aria-expanded', 'false');
+        chatHistoryPanel.setAttribute('aria-hidden', 'true');
+      }
+    });
+  }
+
+  document.addEventListener('click', (e) => {
+    if (!chatHistoryPanel || chatHistoryPanel.classList.contains('hidden')) return;
+    if (chatHistoryPanel.contains(e.target)) return;
+    if (e.target.closest && e.target.closest('#chat-history-toggle')) return;
+    chatHistoryPanel.classList.add('hidden');
+    if (chatHistoryToggle) chatHistoryToggle.setAttribute('aria-expanded', 'false');
+    chatHistoryPanel.setAttribute('aria-hidden', 'true');
+  });
+
+  // Now that `addMessage` exists, restore and render any saved conversation.
+  renderConversation(conversation);
+  renderHistoryList();
 })();

@@ -82,6 +82,19 @@ Sentiment labels in the UI are **rough keyword heuristics**, not financial analy
 - **Ollama**: no API cost when running models locally.
 - **CoinGecko**: public API within free-tier limits.
 
+## Attaching text files (e.g. README.md)
+
+- In the chat input area, use **Attach** to add up to **5** text files per send.
+- Allowed: common text types (e.g. `.md`, `.txt`, `.csv`, `.json`, `.log`) and other `text/*` MIME types; each file is capped at **256 KB** on the client.
+- File contents are read **in the browser** and merged into the outgoing user message for that request only. They are **not** uploaded to a separate server storage.
+- Saved chat history stores your message plus a line like `(Attached: README.md)` so you know what you sent; it does **not** re-store full file bodies. To discuss the same file again in a later turn, attach it again.
+- The API accepts up to **200,000** characters per message body (including merged attachment text); very large pastes may be rejected.
+
+## Light / dark theme
+
+- Use the **Light** and **Dark** buttons in the page header to switch themes.
+- The choice is saved in the browser (`localStorage` key `cryptochatpal_theme`) and applied on the next visit.
+
 ## Editing the UI
 
 - Change **structure** in `frontend/index.html`.

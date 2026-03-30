@@ -7,10 +7,20 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Outfit:wght@400;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css" />
+  <script>
+    (function () {
+      try {
+        if (localStorage.getItem('cryptochatpal_theme') === 'light') {
+          document.documentElement.setAttribute('data-theme', 'light');
+        }
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="css/style.css?v=20260330-3" />
 </head>
 <body>
   <header>
+    <div class="header-brand">
     <div class="logo" role="img" aria-label="Crypto ChatPal — friendly robot mascot">
       <svg class="logo-svg" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
         <!-- App tile -->
@@ -69,6 +79,11 @@
       </svg>
     </div>
     <h1>Crypto ChatPal</h1>
+    </div>
+    <div class="header-theme" role="group" aria-label="Color theme">
+      <button type="button" id="theme-light" class="theme-btn" aria-pressed="false">Light</button>
+      <button type="button" id="theme-dark" class="theme-btn" aria-pressed="true">Dark</button>
+    </div>
   </header>
 
   <div class="layout">
@@ -98,11 +113,34 @@
     </aside>
 
     <div class="chat-column">
+      <div class="chat-toolbar">
+        <span id="chat-save-status" class="chat-save-status" aria-live="polite"></span>
+        <button type="button" id="chat-save" class="chat-toolbar-btn">Save</button>
+        <button type="button" id="chat-new" class="chat-toolbar-btn">New chat</button>
+        <button type="button" id="chat-history-toggle" class="chat-toolbar-btn chat-toolbar-btn--accent" aria-expanded="false" aria-controls="chat-history-panel">
+          Chats
+        </button>
+      </div>
+      <div id="chat-history-panel" class="chat-history-panel hidden" aria-hidden="true" role="dialog" aria-label="Chat history">
+        <div class="chat-history-head">Your chats</div>
+        <div id="chat-history-list" class="chat-history-list"></div>
+      </div>
       <div class="messages-scroll">
         <div id="messages"></div>
       </div>
       <div id="input-area">
         <div class="input-inner">
+          <input
+            type="file"
+            id="chat-file-input"
+            class="visually-hidden"
+            multiple
+            accept=".md,.txt,.csv,.json,.log,text/plain,text/markdown,application/json"
+            aria-hidden="true"
+            tabindex="-1"
+          />
+          <div id="chat-attach-chips" class="chat-attach-chips hidden" aria-live="polite"></div>
+          <p id="chat-attach-status" class="chat-attach-status visually-hidden" role="status"></p>
           <form id="form">
             <label for="input" class="visually-hidden">Your message</label>
             <textarea
@@ -112,6 +150,9 @@
               title="Enter to send · Shift+Enter for a new line"
               rows="1"
             ></textarea>
+            <button type="button" id="chat-attach" class="chat-attach-btn" title="Attach text files (e.g. README.md)">
+              Attach
+            </button>
             <button type="submit" id="send">Send</button>
           </form>
         </div>
@@ -180,6 +221,6 @@
     </aside>
   </div>
 
-  <script src="js/app.js?v=20260326-3" defer></script>
+  <script src="js/app.js?v=20260330-2" defer></script>
 </body>
 </html>

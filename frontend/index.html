@@ -16,7 +16,7 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="css/style.css?v=20260330-3" />
+  <link rel="stylesheet" href="css/style.css?v=20260330-4" />
 </head>
 <body>
   <header>
@@ -120,6 +120,34 @@
         <button type="button" id="chat-history-toggle" class="chat-toolbar-btn chat-toolbar-btn--accent" aria-expanded="false" aria-controls="chat-history-panel">
           Chats
         </button>
+        <button type="button" id="session-desk-toggle" class="chat-toolbar-btn" aria-expanded="false" aria-controls="session-desk-panel">
+          Session desk
+        </button>
+      </div>
+      <div id="session-desk-panel" class="session-desk hidden" aria-hidden="true">
+        <div class="session-desk-inner">
+          <p class="session-desk-lead">
+            <strong>Session desk</strong> blends your <em>watchlist volatility</em> with <em>headline tone</em> into one live pulse, and keeps a <em>stance log</em> when the assistant answers in trade format (View / Confidence / Score).
+          </p>
+          <div class="session-pulse" aria-live="polite">
+            <div class="session-pulse-top">
+              <span class="session-pulse-label">Market pulse</span>
+              <span id="session-pulse-value" class="session-pulse-value">—</span>
+            </div>
+            <div class="session-pulse-bar-wrap" role="presentation">
+              <div id="session-pulse-bar" class="session-pulse-bar" style="width: 50%"></div>
+            </div>
+            <p id="session-pulse-readout" class="session-pulse-readout">Loading…</p>
+          </div>
+          <div class="session-desk-actions">
+            <button type="button" id="session-desk-export" class="chat-toolbar-btn">Export snapshot</button>
+            <button type="button" id="session-desk-clear-ledger" class="chat-toolbar-btn">Clear stance log</button>
+          </div>
+          <div class="session-stance-block">
+            <div class="session-stance-head">Stance log</div>
+            <ul id="session-stance-list" class="session-stance-list"></ul>
+          </div>
+        </div>
       </div>
       <div id="chat-history-panel" class="chat-history-panel hidden" aria-hidden="true" role="dialog" aria-label="Chat history">
         <div class="chat-history-head">Your chats</div>
@@ -221,6 +249,6 @@
     </aside>
   </div>
 
-  <script src="js/app.js?v=20260330-2" defer></script>
+  <script src="js/app.js?v=20260330-3" defer></script>
 </body>
 </html>

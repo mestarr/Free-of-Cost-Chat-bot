@@ -179,6 +179,151 @@ button {
   color: var(--accent);
 }
 
+.session-desk {
+  flex-shrink: 0;
+  margin: 0 0.75rem 0.5rem;
+  padding: 0.65rem 0.85rem 0.75rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-elevated);
+  box-shadow: var(--toolbar-shadow);
+  max-height: min(320px, 42vh);
+  overflow-y: auto;
+}
+
+.session-desk.hidden {
+  display: none;
+}
+
+.session-desk-inner {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.session-desk-lead {
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--muted);
+  margin-bottom: 0.65rem;
+}
+
+.session-desk-lead strong {
+  color: var(--text);
+}
+
+.session-pulse {
+  margin-bottom: 0.65rem;
+  padding: 0.5rem 0.55rem;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.session-pulse-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.session-pulse-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.session-pulse-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.session-pulse-bar-wrap {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--overlay-soft);
+  overflow: hidden;
+  margin-bottom: 0.4rem;
+}
+
+.session-pulse-bar {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent-dim), var(--accent));
+  transition: width 0.35s ease;
+  min-width: 4px;
+}
+
+.session-pulse-readout {
+  font-size: 0.7rem;
+  color: var(--muted);
+  line-height: 1.4;
+  margin: 0;
+}
+
+.session-desk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.55rem;
+}
+
+.session-stance-block {
+  border-top: 1px solid var(--border);
+  padding-top: 0.5rem;
+}
+
+.session-stance-head {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+
+.session-stance-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.session-stance-list:empty::after {
+  content: 'No stances captured yet. Ask for a buy/sell view — lines like “View:” and “Confidence:” are parsed automatically.';
+  font-size: 0.7rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.session-stance-item {
+  font-size: 0.72rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  line-height: 1.35;
+}
+
+.session-stance-item time {
+  display: block;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  color: var(--muted);
+  margin-bottom: 0.2rem;
+}
+
+.session-stance-item .stance-view {
+  font-weight: 600;
+  color: var(--text);
+}
+
 .chat-history-panel {
   position: absolute;
   top: 3.35rem;

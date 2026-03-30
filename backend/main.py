@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .news import fetch_news_snapshot_for_llm, get_fed_news_api_payload, get_news_api_payload
 from .prices import fetch_live_price_snapshot, fetch_oil_prices_json, fetch_prices_json
@@ -104,7 +104,7 @@ Response discipline:
 
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    content: str = Field(max_length=200_000)
 
 
 class ChatRequest(BaseModel):

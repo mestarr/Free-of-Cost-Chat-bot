@@ -282,6 +282,140 @@
   let priceRows = loadPriceRows();
   let lastPricesPayload = {};
   let lastRenderKey = '';
+  let lastNewsItems = [];
+
+  const STANCE_LEDGER_KEY = 'cryptochatpal_stance_ledger';
+  const MAX_STANCE_ENTRIES = 24;
+
+  function loadStanceLedger() {
+    try {
+      const raw = localStorage.getItem(STANCE_LEDGER_KEY);
+      if (!raw) return [];
+      const arr = JSON.parse(raw);
+      if (!Array.isArray(arr)) return [];
+      return arr
+        .filter((x) => x && typeof x === 'object' && typeof x.t === 'number')
+        .slice(0, MAX_STANCE_ENTRIES);
+    } catch {
+      return [];
+    }
+  }
+
+  function saveStanceLedger() {
+    try {
+      localStorage.setItem(STANCE_LEDGER_KEY, JSON.stringify(stanceLedger.slice(0, MAX_STANCE_ENTRIES)));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  let stanceLedger = loadStanceLedger();
+
+  function parseStanceFromReply(text) {
+    if (!text || typeof text !== 'string') return null;
+    const viewM = text.match(/(?:^|\n)\s*[-•*]?\s*View:\s*(.+?)(?:\n|$)/im);
+    const confM = text.match(/(?:^|\n)\s*[-•*]?\s*Confidence:\s*(\d+)\s*%?/im);
+    const scoreM = text.match(/(?:^|\n)\s*[-•*]?\s*Score:\s*(\d+)/im);
+    if (!viewM && !confM && !scoreM) return null;
+    return {
+      view: viewM ? viewM[1].trim().slice(0, 120) : '',
+      confidence: confM ? confM[1] : '',
+      score: scoreM ? scoreM[1] : '',
+    };
+  }
+
+  function maybeCaptureStance(reply) {
+    const parsed = parseStanceFromReply(reply);
+    if (!parsed) return;
+    stanceLedger.unshift({
+      t: Date.now(),
+      view: parsed.view,
+      confidence: parsed.confidence,
+      score: parsed.score,
+    });
+    stanceLedger = stanceLedger.slice(0, MAX_STANCE_ENTRIES);
+    saveStanceLedger();
+    updateSessionDeskUI();
+  }
+
+  function computeSessionPulse() {
+    let sumAbs = 0;
+    let nch = 0;
+    for (const { id } of priceRows) {
+      const row = lastPricesPayload[id];
+      const ch = row && row.usd_24h_change;
+      if (ch != null && !Number.isNaN(Number(ch))) {
+        sumAbs += Math.min(Math.abs(Number(ch)), 24);
+        nch += 1;
+      }
+    }
+    const avgAbs = nch ? sumAbs / nch : 0;
+    const heatScore = Math.min(100, (avgAbs / 10) * 100);
+
+    const items = lastNewsItems.slice(0, 18);
+    let pos = 0;
+    let neg = 0;
+    let neu = 0;
+    for (const it of items) {
+      const s = it.sentiment;
+      if (s === 'positive') pos += 1;
+      else if (s === 'negative') neg += 1;
+      else neu += 1;
+    }
+    const ntot = pos + neg + neu || 1;
+    const tilt = ((pos - neg) / ntot) * 50 + 50;
+
+    const pulse = Math.round(heatScore * 0.52 + tilt * 0.48);
+    const value = Math.max(0, Math.min(100, pulse));
+
+    let mood = 'Balanced';
+    if (value >= 68) mood = 'Heated';
+    else if (value <= 38) mood = 'Cool';
+
+    const wPart = nch
+      ? `Watchlist avg |24h|: ${(sumAbs / nch).toFixed(1)}%`
+      : 'No 24h change data yet';
+    const hPart =
+      items.length > 0
+        ? `Headlines +${pos} / −${neg} / neutral ${neu}`
+        : 'No headline sample';
+    const detail = `${wPart} · ${hPart}`;
+
+    return { value, mood, detail };
+  }
+
+  function updateSessionDeskUI() {
+    const pulseBar = document.getElementById('session-pulse-bar');
+    const pulseVal = document.getElementById('session-pulse-value');
+    const pulseRead = document.getElementById('session-pulse-readout');
+    const list = document.getElementById('session-stance-list');
+    if (!pulseBar || !pulseVal || !pulseRead) return;
+
+    const p = computeSessionPulse();
+    pulseBar.style.width = `${p.value}%`;
+    pulseVal.textContent = String(p.value);
+    pulseRead.textContent = `${p.mood} — ${p.detail}`;
+
+    if (!list) return;
+    list.innerHTML = '';
+    for (const e of stanceLedger) {
+      const li = document.createElement('li');
+      li.className = 'session-stance-item';
+      const timeEl = document.createElement('time');
+      timeEl.dateTime = new Date(e.t).toISOString();
+      timeEl.textContent = new Date(e.t).toLocaleString();
+      const line = document.createElement('div');
+      line.className = 'stance-view';
+      const bits = [];
+      if (e.view) bits.push(e.view);
+      if (e.confidence) bits.push(`Confidence ${e.confidence}%`);
+      if (e.score) bits.push(`Score ${e.score}`);
+      line.textContent = bits.length ? bits.join(' · ') : '(parsed)';
+      li.appendChild(timeEl);
+      li.appendChild(line);
+      list.appendChild(li);
+    }
+  }
 
   const SESSIONS_STORE_KEY = 'cryptochatpal_sessions';
   const ACTIVE_SESSION_KEY = 'cryptochatpal_active_session';
@@ -496,6 +630,7 @@
     const composite = JSON.stringify(lastPricesPayload) + '|' + orderKey;
     if (composite === lastRenderKey) {
       pricesUpdated.textContent = 'Live · ' + new Date().toLocaleTimeString();
+      updateSessionDeskUI();
       return;
     }
     lastRenderKey = composite;
@@ -527,6 +662,7 @@
       pricesList.appendChild(div);
     }
     pricesUpdated.textContent = 'Live · ' + new Date().toLocaleTimeString();
+    updateSessionDeskUI();
   }
 
   async function loadPrices() {
@@ -794,6 +930,7 @@
     if (!newsList || !newsUpdated) return;
     newsError.classList.add('hidden');
     const items = data.items || [];
+    lastNewsItems = Array.isArray(items) ? items.slice(0, 25) : [];
     newsList.innerHTML = '';
     if (!items.length) {
       const p = document.createElement('p');
@@ -801,6 +938,7 @@
       p.textContent = 'No headlines right now.';
       newsList.appendChild(p);
       newsUpdated.textContent = '';
+      updateSessionDeskUI();
       return;
     }
 
@@ -864,6 +1002,7 @@
     }
 
     newsUpdated.textContent = data.fetched_at ? `Feed refreshed · ${data.fetched_at}` : 'Feed refreshed';
+    updateSessionDeskUI();
   }
 
   async function loadNews() {
@@ -982,6 +1121,7 @@
       const reply = data.message || '';
       botDiv.querySelector('.content').innerHTML = formatContent(reply);
       conversation.push({ role: 'assistant', content: reply });
+      maybeCaptureStance(reply);
       persistChatSessions();
       pendingAttachments = [];
       renderAttachChips();
@@ -1064,7 +1204,72 @@
     chatHistoryPanel.setAttribute('aria-hidden', 'true');
   });
 
+  const sessionDeskToggle = document.getElementById('session-desk-toggle');
+  const sessionDeskPanel = document.getElementById('session-desk-panel');
+  const sessionDeskExport = document.getElementById('session-desk-export');
+  const sessionDeskClearLedger = document.getElementById('session-desk-clear-ledger');
+
+  function exportSessionDeskSnapshot() {
+    const p = computeSessionPulse();
+    const body = JSON.stringify(
+      {
+        app: 'Crypto ChatPal',
+        kind: 'session_desk_snapshot',
+        exportedAt: new Date().toISOString(),
+        marketPulse: p,
+        stanceLog: stanceLedger,
+      },
+      null,
+      2
+    );
+    const blob = new Blob([body], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `cryptochatpal-session-desk-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  if (sessionDeskToggle && sessionDeskPanel) {
+    sessionDeskToggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const hidden = sessionDeskPanel.classList.contains('hidden');
+      if (hidden) {
+        sessionDeskPanel.classList.remove('hidden');
+        sessionDeskToggle.setAttribute('aria-expanded', 'true');
+        sessionDeskPanel.setAttribute('aria-hidden', 'false');
+        updateSessionDeskUI();
+      } else {
+        sessionDeskPanel.classList.add('hidden');
+        sessionDeskToggle.setAttribute('aria-expanded', 'false');
+        sessionDeskPanel.setAttribute('aria-hidden', 'true');
+      }
+    });
+  }
+
+  document.addEventListener('click', (e) => {
+    if (!sessionDeskPanel || sessionDeskPanel.classList.contains('hidden')) return;
+    if (sessionDeskPanel.contains(e.target)) return;
+    if (e.target.closest && e.target.closest('#session-desk-toggle')) return;
+    sessionDeskPanel.classList.add('hidden');
+    if (sessionDeskToggle) sessionDeskToggle.setAttribute('aria-expanded', 'false');
+    sessionDeskPanel.setAttribute('aria-hidden', 'true');
+  });
+
+  if (sessionDeskExport) {
+    sessionDeskExport.addEventListener('click', () => exportSessionDeskSnapshot());
+  }
+
+  if (sessionDeskClearLedger) {
+    sessionDeskClearLedger.addEventListener('click', () => {
+      stanceLedger = [];
+      saveStanceLedger();
+      updateSessionDeskUI();
+    });
+  }
+
   // Now that `addMessage` exists, restore and render any saved conversation.
   renderConversation(conversation);
   renderHistoryList();
+  updateSessionDeskUI();
 })();

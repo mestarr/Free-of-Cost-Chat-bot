@@ -2,13 +2,16 @@
 Free crypto-focused AI chatbot backend.
 Uses Groq (free cloud) if GROQ_API_KEY is set; otherwise Ollama (local).
 """
+import json
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -238,6 +241,103 @@ async def chat(req: ChatRequest):
                 )
             except httpx.HTTPStatusError as e:
                 raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+
+
+def _ndjson_line(obj: dict) -> bytes:
+    return (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+async def _stream_chat_ndjson(messages: list[dict]) -> AsyncIterator[bytes]:
+    """Yield NDJSON lines: {"c":"chunk"} text deltas, then {"done":true,"model":...} or {"error":"..."}."""
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            if USE_GROQ:
+                async with client.stream(
+                    "POST",
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+                    json={"model": GROQ_MODEL, "messages": messages, "stream": True},
+                ) as r:
+                    if r.status_code != 200:
+                        raw = (await r.aread()).decode(errors="replace")
+                        try:
+                            err_j = json.loads(raw)
+                            detail = err_j.get("error", {}).get("message") or raw
+                        except json.JSONDecodeError:
+                            detail = raw or r.reason_phrase
+                        if r.status_code == 401:
+                            detail = "Invalid GROQ_API_KEY. Get a free key at https://console.groq.com"
+                        yield _ndjson_line({"error": detail})
+                        return
+                    async for line in r.aiter_lines():
+                        if not line or line.startswith(":"):
+                            continue
+                        if not line.startswith("data: "):
+                            continue
+                        payload = line[6:].strip()
+                        if payload == "[DONE]":
+                            break
+                        try:
+                            obj = json.loads(payload)
+                        except json.JSONDecodeError:
+                            continue
+                        choice0 = (obj.get("choices") or [{}])[0]
+                        delta = choice0.get("delta") or {}
+                        piece = delta.get("content") or ""
+                        if piece:
+                            yield _ndjson_line({"c": piece})
+                    yield _ndjson_line({"done": True, "model": GROQ_MODEL})
+            else:
+                model_out = OLLAMA_MODEL
+                async with client.stream(
+                    "POST",
+                    f"{OLLAMA_URL}/api/chat",
+                    json={"model": OLLAMA_MODEL, "messages": messages, "stream": True},
+                ) as r:
+                    if r.status_code != 200:
+                        raw = (await r.aread()).decode(errors="replace")
+                        yield _ndjson_line({"error": raw or r.reason_phrase})
+                        return
+                    async for line in r.aiter_lines():
+                        if not line.strip():
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if obj.get("done"):
+                            model_out = obj.get("model") or OLLAMA_MODEL
+                            break
+                        piece = (obj.get("message") or {}).get("content") or ""
+                        if piece:
+                            yield _ndjson_line({"c": piece})
+                    yield _ndjson_line({"done": True, "model": model_out})
+    except httpx.ConnectError:
+        yield _ndjson_line(
+            {
+                "error": "Ollama not running. Install from https://ollama.com or set GROQ_API_KEY for free cloud (https://console.groq.com).",
+            }
+        )
+    except Exception as e:
+        yield _ndjson_line({"error": str(e)})
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(req: ChatRequest):
+    """Same context as /api/chat but streams assistant text as NDJSON (one JSON object per line)."""
+    snapshot = await fetch_live_price_snapshot()
+    news_snap = await fetch_news_snapshot_for_llm()
+    messages = _build_messages(req, snapshot, news_snap)
+
+    return StreamingResponse(
+        _stream_chat_ndjson(messages),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 # Serve frontend

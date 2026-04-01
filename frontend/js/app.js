@@ -1103,31 +1103,119 @@
     if (chatAttachBtn) chatAttachBtn.disabled = true;
 
     try {
-      const res = await fetch('/api/chat', {
+      const res = await fetch('/api/chat/stream', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/x-ndjson',
+        },
         body: JSON.stringify({ messages: messagesForApi }),
       });
-      const data = await res.json().catch(() => ({}));
-      setTyping(botDiv, false);
 
       if (!res.ok) {
+        const t = await res.text();
+        let msg = t;
+        try {
+          const j = JSON.parse(t);
+          if (typeof j.detail === 'string') msg = j.detail;
+          else if (j.detail != null) msg = JSON.stringify(j.detail);
+        } catch (x) {
+          /* use raw text */
+        }
+        setTyping(botDiv, false);
         botDiv.querySelector('.content').innerHTML = formatContent(
-          data.detail || res.statusText || 'Request failed.'
+          msg || res.statusText || 'Request failed.'
         );
         botDiv.classList.add('error');
         return;
       }
-      const reply = data.message || '';
-      botDiv.querySelector('.content').innerHTML = formatContent(reply);
-      conversation.push({ role: 'assistant', content: reply });
-      maybeCaptureStance(reply);
+
+      const reader = res.body && res.body.getReader ? res.body.getReader() : null;
+      if (!reader) {
+        setTyping(botDiv, false);
+        botDiv.querySelector('.content').innerHTML = formatContent('Streaming not supported in this browser.');
+        botDiv.classList.add('error');
+        return;
+      }
+
+      const dec = new TextDecoder();
+      let buf = '';
+      let full = '';
+      let gotChunk = false;
+
+      const applyLine = (line) => {
+        if (!line) return 'continue';
+        let obj;
+        try {
+          obj = JSON.parse(line);
+        } catch (x) {
+          return 'continue';
+        }
+        if (obj.error) {
+          setTyping(botDiv, false);
+          botDiv.classList.remove('streaming');
+          botDiv.querySelector('.content').innerHTML = formatContent(
+            full ? `${full}\n\n— ${obj.error}` : obj.error
+          );
+          botDiv.classList.add('error');
+          return 'error';
+        }
+        if (typeof obj.c === 'string' && obj.c) {
+          if (!gotChunk) {
+            gotChunk = true;
+            setTyping(botDiv, false);
+            botDiv.classList.add('streaming');
+          }
+          full += obj.c;
+          botDiv.querySelector('.content').innerHTML = formatContent(full);
+          scrollChatToBottom();
+        }
+        if (obj.done) {
+          setTyping(botDiv, false);
+          botDiv.classList.remove('streaming');
+        }
+        return 'continue';
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          const r = applyLine(line);
+          if (r === 'error') {
+            return;
+          }
+        }
+      }
+      buf += dec.decode();
+      const tail = buf.trim();
+      if (tail) {
+        const r = applyLine(tail);
+        if (r === 'error') {
+          return;
+        }
+      }
+
+      setTyping(botDiv, false);
+      botDiv.classList.remove('streaming');
+      const reply = full.trim();
+      const stored = reply || '(No text returned.)';
+      if (!reply) {
+        botDiv.querySelector('.content').innerHTML = formatContent('(Empty reply.)');
+      }
+      conversation.push({ role: 'assistant', content: stored });
+      maybeCaptureStance(stored);
       persistChatSessions();
       pendingAttachments = [];
       renderAttachChips();
       setAttachStatus('');
     } catch (err) {
       setTyping(botDiv, false);
+      botDiv.classList.remove('streaming');
       botDiv.querySelector('.content').innerHTML = formatContent(
         'Network error. Is the server running? Check your API key (Groq) or Ollama.'
       );
@@ -1267,6 +1355,24 @@
       updateSessionDeskUI();
     });
   }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const hp = document.getElementById('chat-history-panel');
+    const ht = document.getElementById('chat-history-toggle');
+    if (hp && !hp.classList.contains('hidden')) {
+      hp.classList.add('hidden');
+      if (ht) ht.setAttribute('aria-expanded', 'false');
+      hp.setAttribute('aria-hidden', 'true');
+    }
+    const dp = document.getElementById('session-desk-panel');
+    const dt = document.getElementById('session-desk-toggle');
+    if (dp && !dp.classList.contains('hidden')) {
+      dp.classList.add('hidden');
+      if (dt) dt.setAttribute('aria-expanded', 'false');
+      dp.setAttribute('aria-hidden', 'true');
+    }
+  });
 
   // Now that `addMessage` exists, restore and render any saved conversation.
   renderConversation(conversation);

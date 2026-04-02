@@ -100,6 +100,12 @@ Sentiment labels in the UI are **rough keyword heuristics**, not financial analy
 - The UI calls **`POST /api/chat/stream`**, which streams the assistant reply as **NDJSON** (one JSON object per line: text chunks in `{"c":"..."}`, then `{"done":true,"model":"..."}`).
 - Groq and Ollama both stream; the same price and news context is injected as for `/api/chat`.
 
+## Portfolio (local-first)
+
+- In the **right column**, under the price editor, **Portfolio** lets you track **holdings** by CoinGecko id: **amount** and optional **average buy price (USD)**.
+- **Value** and **unrealized P/L** use the same live prices as the watchlist (`GET /api/prices`). Coins only in the portfolio are still fetched (IDs are merged into one request).
+- Everything is stored in **`localStorage`** (`cryptochatpal_portfolio`); nothing is sent to a server except the existing public price API.
+
 ## Session desk
 
 - Open **Session desk** from the chat toolbar for a **Market pulse** (0–100): a blend of your **watchlist** 24h volatility and **RSS headline** sentiment counts from the left column.

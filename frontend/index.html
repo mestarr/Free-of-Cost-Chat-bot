@@ -16,7 +16,7 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="css/style.css?v=20260330-5" />
+  <link rel="stylesheet" href="css/style.css?v=20260402-1" />
 </head>
 <body>
   <header>
@@ -243,12 +243,92 @@
           </div>
           <button type="button" id="prices-reset-default" class="prices-reset-btn">Reset to default</button>
         </div>
+        <section class="portfolio-panel" aria-label="Your portfolio">
+          <div class="portfolio-header-row">
+            <h2 class="portfolio-heading">Portfolio</h2>
+            <button type="button" id="portfolio-edit-toggle" class="prices-edit-toggle" aria-expanded="false">
+              Edit
+            </button>
+          </div>
+          <p class="sub portfolio-privacy">Saved in this browser only. Add avg buy price (USD) to see P/L.</p>
+          <div id="portfolio-summary" class="portfolio-summary"></div>
+          <div id="portfolio-display" class="portfolio-display"></div>
+          <div id="portfolio-editor" class="portfolio-editor hidden" aria-hidden="true">
+            <p class="prices-editor-hint">CoinGecko ids — same as the live list above.</p>
+            <div id="portfolio-editor-rows" class="portfolio-editor-rows"></div>
+            <div class="portfolio-add-block">
+              <label class="visually-hidden" for="portfolio-preset-select">Add coin from list</label>
+              <select id="portfolio-preset-select" class="prices-select">
+                <option value="">Add from list…</option>
+              </select>
+              <label class="visually-hidden" for="portfolio-add-amount">Amount</label>
+              <input
+                type="text"
+                id="portfolio-add-amount"
+                class="prices-input prices-input--qty"
+                placeholder="Amount"
+                inputmode="decimal"
+                autocomplete="off"
+              />
+              <label class="visually-hidden" for="portfolio-add-avg">Avg buy USD</label>
+              <input
+                type="text"
+                id="portfolio-add-avg"
+                class="prices-input prices-input--avg"
+                placeholder="Avg USD (opt.)"
+                inputmode="decimal"
+                autocomplete="off"
+              />
+              <button type="button" id="portfolio-add-preset" class="prices-btn">Add</button>
+            </div>
+            <div class="portfolio-add-block">
+              <label class="visually-hidden" for="portfolio-custom-id">CoinGecko id</label>
+              <input
+                type="text"
+                id="portfolio-custom-id"
+                class="prices-input"
+                placeholder="id (e.g. chainlink)"
+                maxlength="64"
+                autocomplete="off"
+              />
+              <label class="visually-hidden" for="portfolio-custom-sym">Label</label>
+              <input
+                type="text"
+                id="portfolio-custom-sym"
+                class="prices-input prices-input--sym"
+                placeholder="Label"
+                maxlength="12"
+                autocomplete="off"
+              />
+              <label class="visually-hidden" for="portfolio-custom-amount">Amount</label>
+              <input
+                type="text"
+                id="portfolio-custom-amount"
+                class="prices-input prices-input--qty"
+                placeholder="Amount"
+                inputmode="decimal"
+                autocomplete="off"
+              />
+              <label class="visually-hidden" for="portfolio-custom-avg">Avg buy USD</label>
+              <input
+                type="text"
+                id="portfolio-custom-avg"
+                class="prices-input prices-input--avg"
+                placeholder="Avg USD"
+                inputmode="decimal"
+                autocomplete="off"
+              />
+              <button type="button" id="portfolio-add-custom" class="prices-btn">Add custom</button>
+            </div>
+            <button type="button" id="portfolio-clear" class="prices-reset-btn">Clear portfolio</button>
+          </div>
+        </section>
         <div id="prices-error" class="hidden"></div>
         <div id="prices-list"></div>
       </section>
     </aside>
   </div>
 
-  <script src="js/app.js?v=20260330-4" defer></script>
+  <script src="js/app.js?v=20260402-1" defer></script>
 </body>
 </html>

@@ -733,6 +733,28 @@ header h1 {
   animation: dots 1s steps(4, end) infinite;
 }
 
+.msg.streaming .content::after {
+  content: '';
+  display: inline-block;
+  width: 0.28em;
+  height: 1em;
+  margin-left: 3px;
+  vertical-align: -0.12em;
+  border-radius: 2px;
+  background: var(--accent);
+  animation: stream-caret 0.85s ease-in-out infinite;
+}
+
+@keyframes stream-caret {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.2;
+  }
+}
+
 @keyframes dots {
   0%,
   20% {

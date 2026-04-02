@@ -11,7 +11,7 @@ A **free**, crypto-focused AI chatbot with a web UI, **live USD spot prices** (C
 
 | Path | Purpose |
 |------|---------|
-| `backend/main.py` | FastAPI app: `/api/chat`, `/api/prices`, `/api/news`, serves static frontend |
+| `backend/main.py` | FastAPI app: `/api/chat`, `/api/chat/stream`, `/api/prices`, `/api/news`, serves static frontend |
 | `backend/prices.py` | CoinGecko live prices (cached), shared with chat context |
 | `backend/news.py` | RSS headline aggregation (cached), shared with chat context |
 | `frontend/index.html` | Page structure only |
@@ -94,6 +94,11 @@ Sentiment labels in the UI are **rough keyword heuristics**, not financial analy
 
 - Use the **Light** and **Dark** buttons in the page header to switch themes.
 - The choice is saved in the browser (`localStorage` key `cryptochatpal_theme`) and applied on the next visit.
+
+## Streaming replies
+
+- The UI calls **`POST /api/chat/stream`**, which streams the assistant reply as **NDJSON** (one JSON object per line: text chunks in `{"c":"..."}`, then `{"done":true,"model":"..."}`).
+- Groq and Ollama both stream; the same price and news context is injected as for `/api/chat`.
 
 ## Session desk
 

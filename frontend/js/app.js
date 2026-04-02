@@ -280,6 +280,64 @@
   }
 
   let priceRows = loadPriceRows();
+
+  const PORTFOLIO_STORAGE_KEY = 'cryptochatpal_portfolio';
+  const MAX_PORTFOLIO_ROWS = 24;
+
+  function sanitizeAmount(v) {
+    const n = parseFloat(String(v).replace(/,/g, ''));
+    if (!Number.isFinite(n) || n < 0) return 0;
+    return Math.min(n, 1e15);
+  }
+
+  function sanitizeAvgUsdField(v) {
+    if (v == null || String(v).trim() === '') return null;
+    const n = parseFloat(String(v).replace(/,/g, ''));
+    if (!Number.isFinite(n) || n < 0) return null;
+    return Math.round(n * 1e6) / 1e6;
+  }
+
+  function loadPortfolio() {
+    try {
+      const raw = localStorage.getItem(PORTFOLIO_STORAGE_KEY);
+      if (!raw) return [];
+      const arr = JSON.parse(raw);
+      if (!Array.isArray(arr)) return [];
+      const out = [];
+      const seen = new Set();
+      for (const x of arr) {
+        const id = sanitizeCoinId(x.id || '');
+        const sym = sanitizeSym(x.sym || '') || id.slice(0, 12).toUpperCase();
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        const avgRaw = x.avg;
+        let avg = null;
+        if (avgRaw !== undefined && avgRaw !== null && String(avgRaw).trim() !== '') {
+          avg = sanitizeAvgUsdField(avgRaw);
+        }
+        out.push({
+          id,
+          sym,
+          amount: sanitizeAmount(x.amount),
+          avg,
+        });
+      }
+      return out.slice(0, MAX_PORTFOLIO_ROWS);
+    } catch {
+      return [];
+    }
+  }
+
+  function savePortfolio() {
+    try {
+      localStorage.setItem(PORTFOLIO_STORAGE_KEY, JSON.stringify(portfolioRows));
+    } catch (e) {
+      /* ignore quota */
+    }
+  }
+
+  let portfolioRows = loadPortfolio();
+
   let lastPricesPayload = {};
   let lastRenderKey = '';
   let lastNewsItems = [];
@@ -623,13 +681,158 @@
     return priceRows.map((r) => r.id).join(',');
   }
 
+  function portfolioSignature() {
+    return portfolioRows.map((r) => `${r.id}:${r.amount}:${r.avg == null ? '' : r.avg}`).join('|');
+  }
+
+  function buildCombinedIdsQuery() {
+    const seen = new Set();
+    const out = [];
+    for (const r of priceRows) {
+      if (r.id && !seen.has(r.id)) {
+        seen.add(r.id);
+        out.push(r.id);
+      }
+    }
+    for (const r of portfolioRows) {
+      if (r.id && !seen.has(r.id)) {
+        seen.add(r.id);
+        out.push(r.id);
+      }
+    }
+    return out.join(',');
+  }
+
+  const portfolioSummaryEl = document.getElementById('portfolio-summary');
+  const portfolioDisplayEl = document.getElementById('portfolio-display');
+  const portfolioEditor = document.getElementById('portfolio-editor');
+  const portfolioEditToggle = document.getElementById('portfolio-edit-toggle');
+  const portfolioEditorRows = document.getElementById('portfolio-editor-rows');
+  const portfolioPresetSelect = document.getElementById('portfolio-preset-select');
+  const portfolioAddPresetBtn = document.getElementById('portfolio-add-preset');
+  const portfolioAddAmount = document.getElementById('portfolio-add-amount');
+  const portfolioAddAvg = document.getElementById('portfolio-add-avg');
+  const portfolioCustomId = document.getElementById('portfolio-custom-id');
+  const portfolioCustomSym = document.getElementById('portfolio-custom-sym');
+  const portfolioCustomAmount = document.getElementById('portfolio-custom-amount');
+  const portfolioCustomAvg = document.getElementById('portfolio-custom-avg');
+  const portfolioAddCustomBtn = document.getElementById('portfolio-add-custom');
+  const portfolioClearBtn = document.getElementById('portfolio-clear');
+
+  function fillPortfolioPresetSelect() {
+    if (!portfolioPresetSelect || portfolioPresetSelect.dataset.filled) return;
+    portfolioPresetSelect.dataset.filled = '1';
+    for (const p of COIN_PRESETS) {
+      const o = document.createElement('option');
+      o.value = p.id;
+      o.textContent = `${p.sym} · ${p.id}`;
+      portfolioPresetSelect.appendChild(o);
+    }
+  }
+
+  function renderPortfolioEditorRows() {
+    if (!portfolioEditorRows) return;
+    portfolioEditorRows.innerHTML = '';
+    portfolioRows.forEach((row, i) => {
+      const el = document.createElement('div');
+      el.className = 'portfolio-edit-row';
+      el.innerHTML = `
+        <div class="pe-meta">
+          <span class="pe-sym">${escapeHtml(row.sym)}</span>
+          <span class="pe-id">${escapeHtml(row.id)}</span>
+        </div>
+        <input type="text" class="prices-input" data-port="amt" data-i="${i}" value="${row.amount === 0 ? '' : row.amount}" inputmode="decimal" aria-label="Amount ${escapeHtml(row.sym)}" />
+        <input type="text" class="prices-input" data-port="avg" data-i="${i}" value="${row.avg == null ? '' : row.avg}" placeholder="Avg USD" inputmode="decimal" aria-label="Avg buy USD ${escapeHtml(row.sym)}" />
+        <button type="button" class="prices-row-btn danger" data-port-del="${i}" aria-label="Remove ${escapeHtml(row.sym)}">×</button>`;
+      portfolioEditorRows.appendChild(el);
+    });
+  }
+
+  function renderPortfolioView(data) {
+    if (!portfolioSummaryEl || !portfolioDisplayEl) return;
+    const d = data && typeof data === 'object' ? data : {};
+    if (!portfolioRows.length) {
+      portfolioSummaryEl.innerHTML = '';
+      portfolioDisplayEl.innerHTML =
+        '<p class="news-snippet" style="margin:0">No holdings. Open <strong>Edit</strong> to add coins and amounts.</p>';
+      return;
+    }
+
+    let totalValue = 0;
+    let totalCost = 0;
+    let costParts = 0;
+    const lines = [];
+
+    for (const row of portfolioRows) {
+      const px = d[row.id];
+      const spot = px && px.usd != null ? Number(px.usd) : null;
+      const val = spot != null && !Number.isNaN(spot) ? row.amount * spot : null;
+      if (val != null) totalValue += val;
+
+      let linePl = null;
+      let linePlPct = null;
+      if (row.avg != null && row.amount > 0) {
+        const cost = row.amount * row.avg;
+        totalCost += cost;
+        costParts += 1;
+        if (val != null) {
+          linePl = val - cost;
+          linePlPct = cost > 0 ? (linePl / cost) * 100 : null;
+        }
+      }
+
+      const valS = val != null ? formatUsd(val) : '—';
+      let plS = '—';
+      if (linePl != null) {
+        const sign = linePl >= 0 ? '+' : '';
+        plS = `${sign}${formatUsd(linePl)}`;
+        if (linePlPct != null) plS += ` (${sign}${linePlPct.toFixed(1)}%)`;
+      }
+
+      const spotS = spot != null ? formatUsd(spot) : '—';
+      lines.push(
+        `<div class="portfolio-line"><span class="pl-sym">${escapeHtml(row.sym)}</span><span class="pl-detail">${escapeHtml(String(row.amount))} @ ${spotS} → <strong>${valS}</strong> · P/L ${plS}</span></div>`
+      );
+    }
+
+    const plTotal = costParts > 0 ? totalValue - totalCost : null;
+    const plPctTotal = costParts > 0 && totalCost > 0 ? ((totalValue - totalCost) / totalCost) * 100 : null;
+
+    let plClass = '';
+    let plValHtml = '—';
+    if (plTotal != null) {
+      plClass = plTotal >= 0 ? ' chg-pos' : ' chg-neg';
+      const sign = plTotal >= 0 ? '+' : '';
+      plValHtml = `${sign}${formatUsd(plTotal)}`;
+      if (plPctTotal != null) plValHtml += ` (${sign}${plPctTotal.toFixed(1)}%)`;
+    }
+
+    const costHtml =
+      costParts > 0 ? formatUsd(totalCost) : `<span class="sub">Add avg buy to see</span>`;
+
+    portfolioSummaryEl.innerHTML = `
+      <div><span class="ps-label">Value (spot)</span><span class="ps-value">${formatUsd(totalValue)}</span></div>
+      <div><span class="ps-label">Cost basis</span><span class="ps-value">${costHtml}</span></div>
+      <div><span class="ps-label">Unrealized P/L</span><span class="ps-value${plClass}">${plValHtml}</span></div>`;
+    portfolioDisplayEl.innerHTML = lines.join('');
+  }
+
+  function persistPortfolioRedrawPrices() {
+    savePortfolio();
+    lastRenderKey = '';
+    renderPortfolioEditorRows();
+    loadPrices();
+  }
+
   function renderPrices(data) {
     pricesError.classList.add('hidden');
     lastPricesPayload = data && typeof data === 'object' ? data : {};
     const orderKey = priceRows.map((r) => r.id).join('|');
-    const composite = JSON.stringify(lastPricesPayload) + '|' + orderKey;
+    const composite =
+      JSON.stringify(lastPricesPayload) + '|' + orderKey + '|' + portfolioSignature();
     if (composite === lastRenderKey) {
       pricesUpdated.textContent = 'Live · ' + new Date().toLocaleTimeString();
+      renderPortfolioView(lastPricesPayload);
       updateSessionDeskUI();
       return;
     }
@@ -662,12 +865,13 @@
       pricesList.appendChild(div);
     }
     pricesUpdated.textContent = 'Live · ' + new Date().toLocaleTimeString();
+    renderPortfolioView(lastPricesPayload);
     updateSessionDeskUI();
   }
 
   async function loadPrices() {
     try {
-      const url = '/api/prices?ids=' + encodeURIComponent(buildIdsQuery());
+      const url = '/api/prices?ids=' + encodeURIComponent(buildCombinedIdsQuery());
       const res = await fetch(url);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -681,6 +885,7 @@
       pricesError.textContent = 'Could not load prices. Check server / CoinGecko.';
       pricesError.classList.remove('hidden');
       pricesUpdated.textContent = '';
+      renderPortfolioView(lastPricesPayload);
     }
   }
 
@@ -800,6 +1005,94 @@
     });
   }
 
+  if (portfolioEditToggle && portfolioEditor) {
+    portfolioEditToggle.addEventListener('click', () => {
+      const opening = portfolioEditor.classList.contains('hidden');
+      if (opening) {
+        portfolioEditor.classList.remove('hidden');
+        portfolioEditToggle.setAttribute('aria-expanded', 'true');
+        portfolioEditToggle.textContent = 'Done';
+        portfolioEditor.setAttribute('aria-hidden', 'false');
+        fillPortfolioPresetSelect();
+        renderPortfolioEditorRows();
+      } else {
+        portfolioEditor.classList.add('hidden');
+        portfolioEditToggle.setAttribute('aria-expanded', 'false');
+        portfolioEditToggle.textContent = 'Edit';
+        portfolioEditor.setAttribute('aria-hidden', 'true');
+      }
+    });
+  }
+
+  if (portfolioEditorRows) {
+    portfolioEditorRows.addEventListener('change', (e) => {
+      const inp = e.target.closest('input[data-port]');
+      if (!inp || !portfolioEditorRows.contains(inp)) return;
+      const i = parseInt(inp.dataset.i, 10);
+      if (Number.isNaN(i) || i < 0 || i >= portfolioRows.length) return;
+      if (inp.dataset.port === 'amt') portfolioRows[i].amount = sanitizeAmount(inp.value);
+      if (inp.dataset.port === 'avg') portfolioRows[i].avg = sanitizeAvgUsdField(inp.value);
+      persistPortfolioRedrawPrices();
+    });
+    portfolioEditorRows.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-port-del]');
+      if (!btn || !portfolioEditorRows.contains(btn)) return;
+      const i = parseInt(btn.dataset.portDel, 10);
+      if (Number.isNaN(i) || i < 0 || i >= portfolioRows.length) return;
+      portfolioRows.splice(i, 1);
+      persistPortfolioRedrawPrices();
+    });
+  }
+
+  if (portfolioAddPresetBtn && portfolioPresetSelect) {
+    portfolioAddPresetBtn.addEventListener('click', () => {
+      const id = portfolioPresetSelect.value;
+      if (!id) return;
+      const p = COIN_PRESETS.find((x) => x.id === id);
+      if (!p) return;
+      if (portfolioRows.some((r) => r.id === p.id)) return;
+      if (portfolioRows.length >= MAX_PORTFOLIO_ROWS) return;
+      const amt = sanitizeAmount(portfolioAddAmount && portfolioAddAmount.value);
+      if (amt <= 0) return;
+      const avg = portfolioAddAvg ? sanitizeAvgUsdField(portfolioAddAvg.value) : null;
+      portfolioRows.push({ id: p.id, sym: p.sym, amount: amt, avg });
+      if (portfolioAddAmount) portfolioAddAmount.value = '';
+      if (portfolioAddAvg) portfolioAddAvg.value = '';
+      portfolioPresetSelect.value = '';
+      persistPortfolioRedrawPrices();
+    });
+  }
+
+  if (portfolioAddCustomBtn) {
+    portfolioAddCustomBtn.addEventListener('click', () => {
+      const id = sanitizeCoinId(portfolioCustomId && portfolioCustomId.value);
+      let sym = sanitizeSym(portfolioCustomSym && portfolioCustomSym.value);
+      if (!id) return;
+      if (!sym) sym = id.slice(0, 12).toUpperCase();
+      if (portfolioRows.some((r) => r.id === id)) return;
+      if (portfolioRows.length >= MAX_PORTFOLIO_ROWS) return;
+      const amt = sanitizeAmount(portfolioCustomAmount && portfolioCustomAmount.value);
+      if (amt <= 0) return;
+      const avg = portfolioCustomAvg ? sanitizeAvgUsdField(portfolioCustomAvg.value) : null;
+      portfolioRows.push({ id, sym, amount: amt, avg });
+      if (portfolioCustomId) portfolioCustomId.value = '';
+      if (portfolioCustomSym) portfolioCustomSym.value = '';
+      if (portfolioCustomAmount) portfolioCustomAmount.value = '';
+      if (portfolioCustomAvg) portfolioCustomAvg.value = '';
+      persistPortfolioRedrawPrices();
+    });
+  }
+
+  if (portfolioClearBtn) {
+    portfolioClearBtn.addEventListener('click', () => {
+      if (!portfolioRows.length) return;
+      if (!window.confirm('Remove all portfolio holdings?')) return;
+      portfolioRows = [];
+      persistPortfolioRedrawPrices();
+    });
+  }
+
+  renderPortfolioView({});
   loadPrices();
   setInterval(loadPrices, 60000);
 

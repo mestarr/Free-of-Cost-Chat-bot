@@ -5,6 +5,7 @@ Uses Groq (free cloud) if GROQ_API_KEY is set; otherwise Ollama (local).
 import json
 import os
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
 import httpx
@@ -23,6 +24,7 @@ _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(_root, ".env"))
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+# Smaller = faster; larger instruct models (e.g. llama-3.3-70b-versatile on Groq) trade speed for depth.
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
@@ -102,6 +104,19 @@ Response discipline:
 - If confidence < 60, default to Hold/Wait unless user explicitly asks for aggressive mode.
 - Include one "What changes my view" bullet.
 - Keep answers short, structured, and numeric where possible.
+
+Smarter reasoning (do this mentally; do not dump a long chain-of-thought in the reply):
+1) Parse the ask: trade idea vs education vs news vs portfolio — answer that shape first.
+2) Bind claims to evidence: any number (price, %, date, metric) must come from user text or injected snapshots, or say "not in context" and avoid the number.
+3) If price snapshot and headlines conflict (e.g. bullish news vs weak price), say the conflict and lower confidence instead of picking a story.
+4) One clarifying question only when the answer would change materially; otherwise state your assumption in one line.
+5) Before a strong view, sanity-check: "Would I still say this if the user only had the injected data?" If not, soften or wait.
+6) For multi-part questions, answer each part explicitly (numbered or short headers).
+
+Quality bar:
+- Prefer one precise paragraph over vague lists when the user asks "why" or "explain".
+- Distinguish facts (from context) vs inference vs opinion — label when it matters.
+- If the user is wrong about a fact present in context, correct gently with the sourced value.
 """
 
 
@@ -146,7 +161,14 @@ app.add_middleware(
 
 def _build_messages(req: ChatRequest, price_snapshot: str = "", news_snapshot: str = "") -> list[dict]:
     """System prompt + optional live prices + headlines + conversation history."""
-    out: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    utc_now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    out: list[dict] = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "system",
+            "content": f"Context anchor: server time is {utc_now}. Use this for recency; injected prices/news may be slightly older than this instant.",
+        },
+    ]
     if price_snapshot:
         out.append({"role": "system", "content": price_snapshot})
     if news_snapshot:

@@ -164,6 +164,19 @@ async def fetch_live_price_snapshot() -> str:
     return _snapshot_from_data(data)
 
 
+def default_prices_grounding_note() -> str:
+    """How fresh the default watchlist CoinGecko snapshot is (for LLM grounding)."""
+    key = _cache_bucket_key(_default_id_list())
+    ent = _caches.get(key)
+    if not ent or not ent.get("data"):
+        return "Live prices: unavailable (no cached CoinGecko data for default set)."
+    age = max(0.0, time.time() - float(ent["ts"]))
+    return (
+        f"Live prices: CoinGecko USD spot for default assets; cache age ~{int(age)}s "
+        f"(refreshed about every {int(TTL_SECONDS)}s)."
+    )
+
+
 async def fetch_prices_json(ids_csv: str | None = None) -> dict:
     """For GET /api/prices — optional `ids` query (comma-separated CoinGecko ids)."""
     return await get_price_data(ids_csv=ids_csv)

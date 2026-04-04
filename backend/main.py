@@ -16,8 +16,13 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .news import fetch_news_snapshot_for_llm, get_fed_news_api_payload, get_news_api_payload
-from .prices import fetch_live_price_snapshot, fetch_oil_prices_json, fetch_prices_json
+from .news import fetch_news_snapshot_for_llm, get_fed_news_api_payload, get_news_api_payload, llm_news_grounding_note
+from .prices import (
+    default_prices_grounding_note,
+    fetch_live_price_snapshot,
+    fetch_oil_prices_json,
+    fetch_prices_json,
+)
 
 # Load project-root .env (same folder as backend/)
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -29,12 +34,26 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 USE_GROQ = bool(GROQ_API_KEY)
+# Lower temperature = more grounded, consistent answers for market analysis (override via .env).
+_llm_temp_raw = os.getenv("LLM_TEMPERATURE", "0.35").strip()
+try:
+    LLM_TEMPERATURE = max(0.0, min(2.0, float(_llm_temp_raw)))
+except ValueError:
+    LLM_TEMPERATURE = 0.35
+_llm_max_raw = os.getenv("LLM_MAX_TOKENS", "4096").strip()
+try:
+    LLM_MAX_TOKENS = max(256, min(32768, int(_llm_max_raw)))
+except ValueError:
+    LLM_MAX_TOKENS = 4096
 
 SYSTEM_PROMPT = """You are Crypto ChatPal, a direct crypto market analyst. Be clear, specific, and practical. No fluff.
 
 Core behavior:
+- Match response shape to intent:
+  - Education, definitions, how things work, history, or general discussion: answer directly in plain language. Do not use the full trade scorecard / entry-exit plan unless the user clearly asks for trading or investment action.
+  - Trading or investment action (buy/sell/hold, entries, targets, sizing, "what should I do", portfolio moves): use the full decision framework and structured format below.
 - You ARE allowed to give a directional trading opinion when asked (buy / sell / hold), but present it as probabilistic analysis, never certainty.
-- Use only available evidence: user context, injected live prices, and injected headlines/news. Do not invent data.
+- Use only available evidence: user messages, attached files, and the injected system blocks (live prices, headlines, grounding notes). Treat those blocks as the only authoritative numbers and story list; do not invent prices, dates, or headlines.
 - If data is missing or stale, explicitly say so and lower confidence.
 - Respond in the same language as the user unless they ask otherwise.
 
@@ -105,13 +124,13 @@ Response discipline:
 - Include one "What changes my view" bullet.
 - Keep answers short, structured, and numeric where possible.
 
-Smarter reasoning (do this mentally; do not dump a long chain-of-thought in the reply):
-1) Parse the ask: trade idea vs education vs news vs portfolio — answer that shape first.
-2) Bind claims to evidence: any number (price, %, date, metric) must come from user text or injected snapshots, or say "not in context" and avoid the number.
-3) If price snapshot and headlines conflict (e.g. bullish news vs weak price), say the conflict and lower confidence instead of picking a story.
-4) One clarifying question only when the answer would change materially; otherwise state your assumption in one line.
-5) Before a strong view, sanity-check: "Would I still say this if the user only had the injected data?" If not, soften or wait.
-6) For multi-part questions, answer each part explicitly (numbered or short headers).
+Reasoning discipline (internal; keep the reply concise):
+1) Classify: trade action vs education vs news vs portfolio — lead with what they asked.
+2) Ground every number (price, %, date) in user text, attachments, or injected blocks; otherwise say it is not in context.
+3) If prices and headlines disagree, state the tension and reduce confidence instead of forcing one narrative.
+4) Ask at most one clarifying question when it would materially change the answer; else state one-line assumptions.
+5) Before a strong view, check it still holds using only injected data; if not, soften or recommend wait.
+6) Multi-part questions: answer each part with a short header or number.
 
 Quality bar:
 - Prefer one precise paragraph over vague lists when the user asks "why" or "explain".
@@ -159,8 +178,14 @@ app.add_middleware(
 )
 
 
-def _build_messages(req: ChatRequest, price_snapshot: str = "", news_snapshot: str = "") -> list[dict]:
-    """System prompt + optional live prices + headlines + conversation history."""
+def _build_messages(
+    req: ChatRequest,
+    price_snapshot: str = "",
+    news_snapshot: str = "",
+    price_grounding: str = "",
+    news_grounding: str = "",
+) -> list[dict]:
+    """System prompt + grounding manifest + optional live prices + headlines + conversation history."""
     utc_now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     out: list[dict] = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -169,6 +194,22 @@ def _build_messages(req: ChatRequest, price_snapshot: str = "", news_snapshot: s
             "content": f"Context anchor: server time is {utc_now}. Use this for recency; injected prices/news may be slightly older than this instant.",
         },
     ]
+    pg = (price_grounding or "").strip() or "Live prices: status unknown."
+    ng = (news_grounding or "").strip() or "Headlines: status unknown."
+    manifest_lines = [
+        "Grounding manifest for this request:",
+        pg,
+        ng,
+    ]
+    if price_snapshot.strip():
+        manifest_lines.append("Next system message: USD spot snapshot (CoinGecko) for the default watchlist.")
+    else:
+        manifest_lines.append("No price snapshot block follows.")
+    if news_snapshot.strip():
+        manifest_lines.append("Next system message: recent crypto RSS headlines (source + title + link per item).")
+    else:
+        manifest_lines.append("No headline snapshot block follows.")
+    out.append({"role": "system", "content": "\n".join(manifest_lines)})
     if price_snapshot:
         out.append({"role": "system", "content": price_snapshot})
     if news_snapshot:
@@ -176,6 +217,10 @@ def _build_messages(req: ChatRequest, price_snapshot: str = "", news_snapshot: s
     for m in req.messages:
         out.append({"role": m.role, "content": m.content})
     return out
+
+
+def _ollama_options() -> dict:
+    return {"temperature": LLM_TEMPERATURE, "num_predict": LLM_MAX_TOKENS}
 
 
 @app.get("/api/prices")
@@ -225,7 +270,13 @@ async def chat(req: ChatRequest):
     """Send conversation to Groq or Ollama with crypto-focused system prompt."""
     snapshot = await fetch_live_price_snapshot()
     news_snap = await fetch_news_snapshot_for_llm()
-    messages = _build_messages(req, snapshot, news_snap)
+    messages = _build_messages(
+        req,
+        snapshot,
+        news_snap,
+        default_prices_grounding_note(),
+        llm_news_grounding_note(),
+    )
 
     if USE_GROQ:
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -233,7 +284,12 @@ async def chat(req: ChatRequest):
                 r = await client.post(
                     "https://api.groq.com/openai/v1/chat/completions",
                     headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-                    json={"model": GROQ_MODEL, "messages": messages},
+                    json={
+                        "model": GROQ_MODEL,
+                        "messages": messages,
+                        "temperature": LLM_TEMPERATURE,
+                        "max_tokens": LLM_MAX_TOKENS,
+                    },
                 )
                 r.raise_for_status()
                 data = r.json()
@@ -249,7 +305,12 @@ async def chat(req: ChatRequest):
             try:
                 r = await client.post(
                     f"{OLLAMA_URL}/api/chat",
-                    json={"model": OLLAMA_MODEL, "messages": messages, "stream": False},
+                    json={
+                        "model": OLLAMA_MODEL,
+                        "messages": messages,
+                        "stream": False,
+                        "options": _ollama_options(),
+                    },
                 )
                 r.raise_for_status()
                 data = r.json()
@@ -278,7 +339,13 @@ async def _stream_chat_ndjson(messages: list[dict]) -> AsyncIterator[bytes]:
                     "POST",
                     "https://api.groq.com/openai/v1/chat/completions",
                     headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-                    json={"model": GROQ_MODEL, "messages": messages, "stream": True},
+                    json={
+                        "model": GROQ_MODEL,
+                        "messages": messages,
+                        "stream": True,
+                        "temperature": LLM_TEMPERATURE,
+                        "max_tokens": LLM_MAX_TOKENS,
+                    },
                 ) as r:
                     if r.status_code != 200:
                         raw = (await r.aread()).decode(errors="replace")
@@ -314,7 +381,12 @@ async def _stream_chat_ndjson(messages: list[dict]) -> AsyncIterator[bytes]:
                 async with client.stream(
                     "POST",
                     f"{OLLAMA_URL}/api/chat",
-                    json={"model": OLLAMA_MODEL, "messages": messages, "stream": True},
+                    json={
+                        "model": OLLAMA_MODEL,
+                        "messages": messages,
+                        "stream": True,
+                        "options": _ollama_options(),
+                    },
                 ) as r:
                     if r.status_code != 200:
                         raw = (await r.aread()).decode(errors="replace")
@@ -349,7 +421,13 @@ async def chat_stream(req: ChatRequest):
     """Same context as /api/chat but streams assistant text as NDJSON (one JSON object per line)."""
     snapshot = await fetch_live_price_snapshot()
     news_snap = await fetch_news_snapshot_for_llm()
-    messages = _build_messages(req, snapshot, news_snap)
+    messages = _build_messages(
+        req,
+        snapshot,
+        news_snap,
+        default_prices_grounding_note(),
+        llm_news_grounding_note(),
+    )
 
     return StreamingResponse(
         _stream_chat_ndjson(messages),

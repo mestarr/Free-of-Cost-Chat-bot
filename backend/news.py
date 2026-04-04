@@ -197,6 +197,17 @@ async def get_news_api_payload(limit: int = 25) -> dict[str, Any]:
     }
 
 
+def llm_news_grounding_note() -> str:
+    """When RSS headlines were last merged into cache (UTC), for LLM grounding."""
+    fetched = str(_cache.get("fetched_at") or "").strip()
+    n = len(_cache.get("items") or [])
+    if not n:
+        return "Headlines: none in cache (feeds empty or unreachable)."
+    if fetched:
+        return f"Headlines: {n} items in cache; bundle last updated {fetched} UTC."
+    return f"Headlines: {n} items in cache."
+
+
 async def fetch_news_snapshot_for_llm() -> str:
     """Compact headline list for the model (attribution + links)."""
     items = await get_news_items()

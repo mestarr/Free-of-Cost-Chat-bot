@@ -217,31 +217,19 @@ def _build_messages(
     ]
     pg = (price_grounding or "").strip() or "Price feed: status unknown."
     ng = (news_grounding or "").strip() or "News feed: status unknown."
-    manifest = [
-        "Grounding manifest (what is attached this request — obey Grounding rules in the main system prompt):",
-    pg = (price_grounding or "").strip() or "Live prices: status unknown."
-    ng = (news_grounding or "").strip() or "Headlines: status unknown."
     manifest_lines = [
-        "Grounding manifest for this request:",
+        "Grounding manifest (what is attached this request — obey Grounding rules in the main system prompt):",
         pg,
         ng,
     ]
     if price_snapshot.strip():
-        manifest.append("Following message: USD spot snapshot (authoritative for listed assets only).")
+        manifest_lines.append("Following message: USD spot snapshot (authoritative for listed assets only).")
     else:
-        manifest.append("No USD spot snapshot message follows.")
+        manifest_lines.append("No USD spot snapshot message follows.")
     if news_snapshot.strip():
-        manifest.append("Following message: RSS headline list (authoritative for those stories only).")
+        manifest_lines.append("Following message: RSS headline list (authoritative for those stories only).")
     else:
-        manifest.append("No RSS headline list message follows.")
-    out.append({"role": "system", "content": "\n".join(manifest)})
-        manifest_lines.append("Next system message: USD spot snapshot (CoinGecko) for the default watchlist.")
-    else:
-        manifest_lines.append("No price snapshot block follows.")
-    if news_snapshot.strip():
-        manifest_lines.append("Next system message: recent crypto RSS headlines (source + title + link per item).")
-    else:
-        manifest_lines.append("No headline snapshot block follows.")
+        manifest_lines.append("No RSS headline list message follows.")
     out.append({"role": "system", "content": "\n".join(manifest_lines)})
     if price_snapshot:
         out.append({"role": "system", "content": price_snapshot})

@@ -206,14 +206,6 @@ def llm_news_grounding_note() -> str:
     if fetched:
         return f"News feed: {n} deduped crypto RSS items; bundle last merged {fetched} UTC."
     return f"News feed: {n} deduped crypto RSS items in cache."
-    """When RSS headlines were last merged into cache (UTC), for LLM grounding."""
-    fetched = str(_cache.get("fetched_at") or "").strip()
-    n = len(_cache.get("items") or [])
-    if not n:
-        return "Headlines: none in cache (feeds empty or unreachable)."
-    if fetched:
-        return f"Headlines: {n} items in cache; bundle last updated {fetched} UTC."
-    return f"Headlines: {n} items in cache."
 
 
 async def fetch_news_snapshot_for_llm() -> str:

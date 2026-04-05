@@ -12,16 +12,22 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .news import fetch_news_snapshot_for_llm, get_fed_news_api_payload, get_news_api_payload
-from .prices import fetch_live_price_snapshot, fetch_oil_prices_json, fetch_prices_json
+from .news import fetch_news_snapshot_for_llm, get_fed_news_api_payload, get_news_api_payload, llm_news_grounding_note
+from .prices import (
+    default_prices_grounding_note,
+    fetch_live_price_snapshot,
+    fetch_oil_prices_json,
+    fetch_prices_json,
+)
 
 # Load project-root .env (same folder as backend/)
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(_root, ".env"))
+FRONTEND_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 # Smaller = faster; larger instruct models (e.g. llama-3.3-70b-versatile on Groq) trade speed for depth.
@@ -34,9 +40,20 @@ SYSTEM_PROMPT = """You are Crypto ChatPal, a direct crypto market analyst. Be cl
 
 Core behavior:
 - You ARE allowed to give a directional trading opinion when asked (buy / sell / hold), but present it as probabilistic analysis, never certainty.
-- Use only available evidence: user context, injected live prices, and injected headlines/news. Do not invent data.
-- If data is missing or stale, explicitly say so and lower confidence.
+- Follow Grounding rules (below) for every factual claim about live markets, current prices, or news in this session.
+- If injected data is missing or stale, say so explicitly and lower confidence; never fill gaps with invented numbers or headlines.
 - Respond in the same language as the user unless they ask otherwise.
+
+Grounding rules (strict — read before answering):
+- What counts as "in context" for live/session-specific claims:
+  1) Injected system messages in this request: optional grounding manifest (what is attached + freshness), optional USD spot snapshot (CoinGecko, default watchlist only), optional RSS headline list (each line: source, title, snippet, URL).
+  2) The user's messages, including any pasted or attached file text they sent in this chat.
+- General crypto education (definitions, how protocols work, historical patterns as concepts) may use broad knowledge, but you must not present it as today's live price or a real headline unless that exact fact appears in (1) or (2). When mixing, label briefly: e.g. "From the price snapshot:" / "From headlines:" / "General concept (not from live feed):".
+- Forbidden: fabricating USD prices, 24h % moves, dates/times of news, headline wording, outlet names, article URLs, or "the data shows X" when X is not in (1)–(2). Do not imply you saw the full article body unless the user pasted it.
+- Asset scope: the spot block only covers coins listed in that snapshot. If the user asks about another asset, say it is outside the injected watchlist unless they supplied a price in chat; do not guess a spot price.
+- Headlines: only discuss stories that appear in the headline block; attribute with source and use the provided link when pointing to a story. Do not invent related stories.
+- Staleness: the manifest and context-anchor time describe recency. If data may be outdated for a fast market, say that and soften time-sensitive claims.
+- Contradictions: if user text conflicts with an injected snapshot, call it out and prefer the snapshot for numbers unless the user clearly gives a newer figure as their own input.
 
 Required decision framework for trade-opinion questions:
 1) Thesis (1-2 lines): what side and why.
@@ -105,12 +122,12 @@ Response discipline:
 - Include one "What changes my view" bullet.
 - Keep answers short, structured, and numeric where possible.
 
-Smarter reasoning (do this mentally; do not dump a long chain-of-thought in the reply):
+Smarter reasoning (internal; keep the reply concise):
 1) Parse the ask: trade idea vs education vs news vs portfolio — answer that shape first.
-2) Bind claims to evidence: any number (price, %, date, metric) must come from user text or injected snapshots, or say "not in context" and avoid the number.
-3) If price snapshot and headlines conflict (e.g. bullish news vs weak price), say the conflict and lower confidence instead of picking a story.
+2) Apply Grounding rules: every number (price, %, date, metric) must trace to user text or injected blocks, or say it is not in context and do not guess.
+3) If price snapshot and headlines conflict (e.g. bullish news vs weak price), state the tension and lower confidence instead of forcing one narrative.
 4) One clarifying question only when the answer would change materially; otherwise state your assumption in one line.
-5) Before a strong view, sanity-check: "Would I still say this if the user only had the injected data?" If not, soften or wait.
+5) Before a strong view, check it still holds using only injected data plus user text; if not, soften or recommend wait.
 6) For multi-part questions, answer each part explicitly (numbered or short headers).
 
 Quality bar:
@@ -159,8 +176,14 @@ app.add_middleware(
 )
 
 
-def _build_messages(req: ChatRequest, price_snapshot: str = "", news_snapshot: str = "") -> list[dict]:
-    """System prompt + optional live prices + headlines + conversation history."""
+def _build_messages(
+    req: ChatRequest,
+    price_snapshot: str = "",
+    news_snapshot: str = "",
+    price_grounding: str = "",
+    news_grounding: str = "",
+) -> list[dict]:
+    """System prompt + grounding manifest + optional live prices + headlines + conversation history."""
     utc_now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     out: list[dict] = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -169,6 +192,22 @@ def _build_messages(req: ChatRequest, price_snapshot: str = "", news_snapshot: s
             "content": f"Context anchor: server time is {utc_now}. Use this for recency; injected prices/news may be slightly older than this instant.",
         },
     ]
+    pg = (price_grounding or "").strip() or "Price feed: status unknown."
+    ng = (news_grounding or "").strip() or "News feed: status unknown."
+    manifest = [
+        "Grounding manifest (what is attached this request — obey Grounding rules in the main system prompt):",
+        pg,
+        ng,
+    ]
+    if price_snapshot.strip():
+        manifest.append("Following message: USD spot snapshot (authoritative for listed assets only).")
+    else:
+        manifest.append("No USD spot snapshot message follows.")
+    if news_snapshot.strip():
+        manifest.append("Following message: RSS headline list (authoritative for those stories only).")
+    else:
+        manifest.append("No RSS headline list message follows.")
+    out.append({"role": "system", "content": "\n".join(manifest)})
     if price_snapshot:
         out.append({"role": "system", "content": price_snapshot})
     if news_snapshot:
@@ -225,7 +264,13 @@ async def chat(req: ChatRequest):
     """Send conversation to Groq or Ollama with crypto-focused system prompt."""
     snapshot = await fetch_live_price_snapshot()
     news_snap = await fetch_news_snapshot_for_llm()
-    messages = _build_messages(req, snapshot, news_snap)
+    messages = _build_messages(
+        req,
+        snapshot,
+        news_snap,
+        default_prices_grounding_note(),
+        llm_news_grounding_note(),
+    )
 
     if USE_GROQ:
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -349,7 +394,13 @@ async def chat_stream(req: ChatRequest):
     """Same context as /api/chat but streams assistant text as NDJSON (one JSON object per line)."""
     snapshot = await fetch_live_price_snapshot()
     news_snap = await fetch_news_snapshot_for_llm()
-    messages = _build_messages(req, snapshot, news_snap)
+    messages = _build_messages(
+        req,
+        snapshot,
+        news_snap,
+        default_prices_grounding_note(),
+        llm_news_grounding_note(),
+    )
 
     return StreamingResponse(
         _stream_chat_ndjson(messages),
@@ -362,7 +413,18 @@ async def chat_stream(req: ChatRequest):
     )
 
 
-# Serve frontend
-static_dir = os.path.join(os.path.dirname(__file__), "..", "frontend")
-if os.path.isdir(static_dir):
-    app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+# Serve frontend (explicit favicon so GET /favicon.ico is not 404 before static mount)
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon_ico():
+    path = os.path.join(FRONTEND_DIR, "favicon.svg")
+    if os.path.isfile(path):
+        return FileResponse(
+            path,
+            media_type="image/svg+xml",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+    raise HTTPException(status_code=404, detail="favicon missing")
+
+
+if os.path.isdir(FRONTEND_DIR):
+    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="static")

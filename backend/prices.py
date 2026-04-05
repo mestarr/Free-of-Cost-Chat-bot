@@ -165,15 +165,15 @@ async def fetch_live_price_snapshot() -> str:
 
 
 def default_prices_grounding_note() -> str:
-    """How fresh the default watchlist CoinGecko snapshot is (for LLM grounding)."""
+    """One line for the LLM: what the price snapshot represents and how fresh it is."""
     key = _cache_bucket_key(_default_id_list())
     ent = _caches.get(key)
     if not ent or not ent.get("data"):
-        return "Live prices: unavailable (no cached CoinGecko data for default set)."
+        return "Price feed: no cached CoinGecko USD data for the default watchlist (do not quote spot prices)."
     age = max(0.0, time.time() - float(ent["ts"]))
     return (
-        f"Live prices: CoinGecko USD spot for default assets; cache age ~{int(age)}s "
-        f"(refreshed about every {int(TTL_SECONDS)}s)."
+        f"Price feed: CoinGecko USD spot + 24h change for the default watchlist only; "
+        f"cache ~{int(age)}s old (refreshed about every {int(TTL_SECONDS)}s)."
     )
 
 

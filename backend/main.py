@@ -12,7 +12,7 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -27,6 +27,7 @@ from .prices import (
 # Load project-root .env (same folder as backend/)
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(_root, ".env"))
+FRONTEND_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 # Smaller = faster; larger instruct models (e.g. llama-3.3-70b-versatile on Groq) trade speed for depth.
@@ -53,9 +54,22 @@ Core behavior:
   - Education, definitions, how things work, history, or general discussion: answer directly in plain language. Do not use the full trade scorecard / entry-exit plan unless the user clearly asks for trading or investment action.
   - Trading or investment action (buy/sell/hold, entries, targets, sizing, "what should I do", portfolio moves): use the full decision framework and structured format below.
 - You ARE allowed to give a directional trading opinion when asked (buy / sell / hold), but present it as probabilistic analysis, never certainty.
+- Follow Grounding rules (below) for every factual claim about live markets, current prices, or news in this session.
+- If injected data is missing or stale, say so explicitly and lower confidence; never fill gaps with invented numbers or headlines.
 - Use only available evidence: user messages, attached files, and the injected system blocks (live prices, headlines, grounding notes). Treat those blocks as the only authoritative numbers and story list; do not invent prices, dates, or headlines.
 - If data is missing or stale, explicitly say so and lower confidence.
 - Respond in the same language as the user unless they ask otherwise.
+
+Grounding rules (strict — read before answering):
+- What counts as "in context" for live/session-specific claims:
+  1) Injected system messages in this request: optional grounding manifest (what is attached + freshness), optional USD spot snapshot (CoinGecko, default watchlist only), optional RSS headline list (each line: source, title, snippet, URL).
+  2) The user's messages, including any pasted or attached file text they sent in this chat.
+- General crypto education (definitions, how protocols work, historical patterns as concepts) may use broad knowledge, but you must not present it as today's live price or a real headline unless that exact fact appears in (1) or (2). When mixing, label briefly: e.g. "From the price snapshot:" / "From headlines:" / "General concept (not from live feed):".
+- Forbidden: fabricating USD prices, 24h % moves, dates/times of news, headline wording, outlet names, article URLs, or "the data shows X" when X is not in (1)–(2). Do not imply you saw the full article body unless the user pasted it.
+- Asset scope: the spot block only covers coins listed in that snapshot. If the user asks about another asset, say it is outside the injected watchlist unless they supplied a price in chat; do not guess a spot price.
+- Headlines: only discuss stories that appear in the headline block; attribute with source and use the provided link when pointing to a story. Do not invent related stories.
+- Staleness: the manifest and context-anchor time describe recency. If data may be outdated for a fast market, say that and soften time-sensitive claims.
+- Contradictions: if user text conflicts with an injected snapshot, call it out and prefer the snapshot for numbers unless the user clearly gives a newer figure as their own input.
 
 Required decision framework for trade-opinion questions:
 1) Thesis (1-2 lines): what side and why.
@@ -124,6 +138,13 @@ Response discipline:
 - Include one "What changes my view" bullet.
 - Keep answers short, structured, and numeric where possible.
 
+Smarter reasoning (internal; keep the reply concise):
+1) Parse the ask: trade idea vs education vs news vs portfolio — answer that shape first.
+2) Apply Grounding rules: every number (price, %, date, metric) must trace to user text or injected blocks, or say it is not in context and do not guess.
+3) If price snapshot and headlines conflict (e.g. bullish news vs weak price), state the tension and lower confidence instead of forcing one narrative.
+4) One clarifying question only when the answer would change materially; otherwise state your assumption in one line.
+5) Before a strong view, check it still holds using only injected data plus user text; if not, soften or recommend wait.
+6) For multi-part questions, answer each part explicitly (numbered or short headers).
 Reasoning discipline (internal; keep the reply concise):
 1) Classify: trade action vs education vs news vs portfolio — lead with what they asked.
 2) Ground every number (price, %, date) in user text, attachments, or injected blocks; otherwise say it is not in context.
@@ -194,21 +215,21 @@ def _build_messages(
             "content": f"Context anchor: server time is {utc_now}. Use this for recency; injected prices/news may be slightly older than this instant.",
         },
     ]
-    pg = (price_grounding or "").strip() or "Live prices: status unknown."
-    ng = (news_grounding or "").strip() or "Headlines: status unknown."
+    pg = (price_grounding or "").strip() or "Price feed: status unknown."
+    ng = (news_grounding or "").strip() or "News feed: status unknown."
     manifest_lines = [
-        "Grounding manifest for this request:",
+        "Grounding manifest (what is attached this request — obey Grounding rules in the main system prompt):",
         pg,
         ng,
     ]
     if price_snapshot.strip():
-        manifest_lines.append("Next system message: USD spot snapshot (CoinGecko) for the default watchlist.")
+        manifest_lines.append("Following message: USD spot snapshot (authoritative for listed assets only).")
     else:
-        manifest_lines.append("No price snapshot block follows.")
+        manifest_lines.append("No USD spot snapshot message follows.")
     if news_snapshot.strip():
-        manifest_lines.append("Next system message: recent crypto RSS headlines (source + title + link per item).")
+        manifest_lines.append("Following message: RSS headline list (authoritative for those stories only).")
     else:
-        manifest_lines.append("No headline snapshot block follows.")
+        manifest_lines.append("No RSS headline list message follows.")
     out.append({"role": "system", "content": "\n".join(manifest_lines)})
     if price_snapshot:
         out.append({"role": "system", "content": price_snapshot})
@@ -440,7 +461,18 @@ async def chat_stream(req: ChatRequest):
     )
 
 
-# Serve frontend
-static_dir = os.path.join(os.path.dirname(__file__), "..", "frontend")
-if os.path.isdir(static_dir):
-    app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+# Serve frontend (explicit favicon so GET /favicon.ico is not 404 before static mount)
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon_ico():
+    path = os.path.join(FRONTEND_DIR, "favicon.svg")
+    if os.path.isfile(path):
+        return FileResponse(
+            path,
+            media_type="image/svg+xml",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+    raise HTTPException(status_code=404, detail="favicon missing")
+
+
+if os.path.isdir(FRONTEND_DIR):
+    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="static")

@@ -35,13 +35,29 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 USE_GROQ = bool(GROQ_API_KEY)
+# Lower temperature = more grounded, consistent answers for market analysis (override via .env).
+_llm_temp_raw = os.getenv("LLM_TEMPERATURE", "0.35").strip()
+try:
+    LLM_TEMPERATURE = max(0.0, min(2.0, float(_llm_temp_raw)))
+except ValueError:
+    LLM_TEMPERATURE = 0.35
+_llm_max_raw = os.getenv("LLM_MAX_TOKENS", "4096").strip()
+try:
+    LLM_MAX_TOKENS = max(256, min(32768, int(_llm_max_raw)))
+except ValueError:
+    LLM_MAX_TOKENS = 4096
 
 SYSTEM_PROMPT = """You are Crypto ChatPal, a direct crypto market analyst. Be clear, specific, and practical. No fluff.
 
 Core behavior:
+- Match response shape to intent:
+  - Education, definitions, how things work, history, or general discussion: answer directly in plain language. Do not use the full trade scorecard / entry-exit plan unless the user clearly asks for trading or investment action.
+  - Trading or investment action (buy/sell/hold, entries, targets, sizing, "what should I do", portfolio moves): use the full decision framework and structured format below.
 - You ARE allowed to give a directional trading opinion when asked (buy / sell / hold), but present it as probabilistic analysis, never certainty.
 - Follow Grounding rules (below) for every factual claim about live markets, current prices, or news in this session.
 - If injected data is missing or stale, say so explicitly and lower confidence; never fill gaps with invented numbers or headlines.
+- Use only available evidence: user messages, attached files, and the injected system blocks (live prices, headlines, grounding notes). Treat those blocks as the only authoritative numbers and story list; do not invent prices, dates, or headlines.
+- If data is missing or stale, explicitly say so and lower confidence.
 - Respond in the same language as the user unless they ask otherwise.
 
 Grounding rules (strict — read before answering):
@@ -129,6 +145,13 @@ Smarter reasoning (internal; keep the reply concise):
 4) One clarifying question only when the answer would change materially; otherwise state your assumption in one line.
 5) Before a strong view, check it still holds using only injected data plus user text; if not, soften or recommend wait.
 6) For multi-part questions, answer each part explicitly (numbered or short headers).
+Reasoning discipline (internal; keep the reply concise):
+1) Classify: trade action vs education vs news vs portfolio — lead with what they asked.
+2) Ground every number (price, %, date) in user text, attachments, or injected blocks; otherwise say it is not in context.
+3) If prices and headlines disagree, state the tension and reduce confidence instead of forcing one narrative.
+4) Ask at most one clarifying question when it would materially change the answer; else state one-line assumptions.
+5) Before a strong view, check it still holds using only injected data; if not, soften or recommend wait.
+6) Multi-part questions: answer each part with a short header or number.
 
 Quality bar:
 - Prefer one precise paragraph over vague lists when the user asks "why" or "explain".
@@ -196,6 +219,10 @@ def _build_messages(
     ng = (news_grounding or "").strip() or "News feed: status unknown."
     manifest = [
         "Grounding manifest (what is attached this request — obey Grounding rules in the main system prompt):",
+    pg = (price_grounding or "").strip() or "Live prices: status unknown."
+    ng = (news_grounding or "").strip() or "Headlines: status unknown."
+    manifest_lines = [
+        "Grounding manifest for this request:",
         pg,
         ng,
     ]
@@ -208,6 +235,14 @@ def _build_messages(
     else:
         manifest.append("No RSS headline list message follows.")
     out.append({"role": "system", "content": "\n".join(manifest)})
+        manifest_lines.append("Next system message: USD spot snapshot (CoinGecko) for the default watchlist.")
+    else:
+        manifest_lines.append("No price snapshot block follows.")
+    if news_snapshot.strip():
+        manifest_lines.append("Next system message: recent crypto RSS headlines (source + title + link per item).")
+    else:
+        manifest_lines.append("No headline snapshot block follows.")
+    out.append({"role": "system", "content": "\n".join(manifest_lines)})
     if price_snapshot:
         out.append({"role": "system", "content": price_snapshot})
     if news_snapshot:
@@ -215,6 +250,10 @@ def _build_messages(
     for m in req.messages:
         out.append({"role": m.role, "content": m.content})
     return out
+
+
+def _ollama_options() -> dict:
+    return {"temperature": LLM_TEMPERATURE, "num_predict": LLM_MAX_TOKENS}
 
 
 @app.get("/api/prices")
@@ -278,7 +317,12 @@ async def chat(req: ChatRequest):
                 r = await client.post(
                     "https://api.groq.com/openai/v1/chat/completions",
                     headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-                    json={"model": GROQ_MODEL, "messages": messages},
+                    json={
+                        "model": GROQ_MODEL,
+                        "messages": messages,
+                        "temperature": LLM_TEMPERATURE,
+                        "max_tokens": LLM_MAX_TOKENS,
+                    },
                 )
                 r.raise_for_status()
                 data = r.json()
@@ -294,7 +338,12 @@ async def chat(req: ChatRequest):
             try:
                 r = await client.post(
                     f"{OLLAMA_URL}/api/chat",
-                    json={"model": OLLAMA_MODEL, "messages": messages, "stream": False},
+                    json={
+                        "model": OLLAMA_MODEL,
+                        "messages": messages,
+                        "stream": False,
+                        "options": _ollama_options(),
+                    },
                 )
                 r.raise_for_status()
                 data = r.json()
@@ -323,7 +372,13 @@ async def _stream_chat_ndjson(messages: list[dict]) -> AsyncIterator[bytes]:
                     "POST",
                     "https://api.groq.com/openai/v1/chat/completions",
                     headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-                    json={"model": GROQ_MODEL, "messages": messages, "stream": True},
+                    json={
+                        "model": GROQ_MODEL,
+                        "messages": messages,
+                        "stream": True,
+                        "temperature": LLM_TEMPERATURE,
+                        "max_tokens": LLM_MAX_TOKENS,
+                    },
                 ) as r:
                     if r.status_code != 200:
                         raw = (await r.aread()).decode(errors="replace")
@@ -359,7 +414,12 @@ async def _stream_chat_ndjson(messages: list[dict]) -> AsyncIterator[bytes]:
                 async with client.stream(
                     "POST",
                     f"{OLLAMA_URL}/api/chat",
-                    json={"model": OLLAMA_MODEL, "messages": messages, "stream": True},
+                    json={
+                        "model": OLLAMA_MODEL,
+                        "messages": messages,
+                        "stream": True,
+                        "options": _ollama_options(),
+                    },
                 ) as r:
                     if r.status_code != 200:
                         raw = (await r.aread()).decode(errors="replace")

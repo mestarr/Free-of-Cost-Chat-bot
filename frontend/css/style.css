@@ -557,6 +557,81 @@ header h1 {
   border: 1px solid var(--border);
 }
 
+.msg .trade-card {
+  margin-bottom: 0.85rem;
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  background: rgba(0, 212, 170, 0.08);
+  border: 1px solid rgba(0, 212, 170, 0.22);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.msg .trade-card-head {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+
+.msg .trade-card-view {
+  font-weight: 700;
+  font-size: 1.02rem;
+  color: var(--text);
+  margin-bottom: 0.25rem;
+}
+
+.msg .trade-card-meta {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-bottom: 0.35rem;
+}
+
+.msg .trade-card-meta strong {
+  color: var(--accent);
+}
+
+.msg .trade-card-tf {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+
+.msg .trade-card-scores {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 0.5rem;
+}
+
+.msg .trade-card-scores strong {
+  color: var(--text);
+}
+
+.msg .trade-card-thesis {
+  margin: 0.35rem 0;
+  color: var(--text);
+}
+
+.msg .trade-card-risks {
+  margin: 0.35rem 0 0.35rem 1.1rem;
+  color: var(--text);
+  font-size: 0.88rem;
+}
+
+.msg .trade-card-change {
+  margin-top: 0.45rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+html[data-theme='light'] .msg .trade-card {
+  background: rgba(0, 148, 111, 0.1);
+  border-color: rgba(0, 148, 111, 0.25);
+}
+
 .msg .role {
   font-size: 0.7rem;
   text-transform: uppercase;

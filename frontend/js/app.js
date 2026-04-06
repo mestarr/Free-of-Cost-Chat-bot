@@ -396,6 +396,56 @@
     updateSessionDeskUI();
   }
 
+  function maybeCaptureStanceFromTrade(trade) {
+    if (!trade || typeof trade !== 'object') return;
+    const view = trade.view != null ? String(trade.view).trim().slice(0, 120) : '';
+    if (!view && trade.confidence == null && trade.score_total == null) return;
+    stanceLedger.unshift({
+      t: Date.now(),
+      view,
+      confidence: trade.confidence != null ? String(trade.confidence) : '',
+      score: trade.score_total != null ? String(trade.score_total) : '',
+    });
+    stanceLedger = stanceLedger.slice(0, MAX_STANCE_ENTRIES);
+    saveStanceLedger();
+    updateSessionDeskUI();
+  }
+
+  function renderTradeCard(botDiv, trade) {
+    if (!trade || typeof trade !== 'object') return;
+    let card = botDiv.querySelector('.trade-card');
+    if (!card) {
+      card = document.createElement('div');
+      card.className = 'trade-card';
+      const content = botDiv.querySelector('.content');
+      if (content) botDiv.insertBefore(card, content);
+      else botDiv.appendChild(card);
+    }
+    const v = (x) => (x == null || x === '' ? '—' : String(x));
+    const risks = Array.isArray(trade.key_risks) ? trade.key_risks.slice(0, 6) : [];
+    const riskHtml = risks.length
+      ? `<ul class="trade-card-risks">${risks.map((r) => `<li>${escapeHtml(String(r))}</li>`).join('')}</ul>`
+      : '';
+    const scores =
+      trade.score_total != null
+        ? `<div class="trade-card-scores">Total <strong>${escapeHtml(String(trade.score_total))}</strong> · Trend ${escapeHtml(v(trade.score_trend))} · News ${escapeHtml(v(trade.score_news))} · R:R ${escapeHtml(v(trade.score_rr))} · Regime ${escapeHtml(v(trade.score_regime))}</div>`
+        : '';
+    const tf =
+      trade.timeframe != null && String(trade.timeframe).trim()
+        ? `<div class="trade-card-tf">${escapeHtml(String(trade.timeframe).trim())}</div>`
+        : '';
+    card.innerHTML = `
+      <div class="trade-card-head">Trade snapshot</div>
+      <div class="trade-card-view">${escapeHtml(v(trade.view))}</div>
+      <div class="trade-card-meta">Confidence <strong>${escapeHtml(v(trade.confidence))}</strong>%</div>
+      ${tf}
+      ${scores}
+      ${trade.thesis ? `<div class="trade-card-thesis">${escapeHtml(String(trade.thesis))}</div>` : ''}
+      ${riskHtml}
+      ${trade.what_changes_view ? `<div class="trade-card-change">${escapeHtml(String(trade.what_changes_view))}</div>` : ''}
+    `;
+  }
+
   function computeSessionPulse() {
     let sumAbs = 0;
     let nch = 0;
@@ -1395,6 +1445,7 @@
     sendBtn.disabled = true;
     if (chatAttachBtn) chatAttachBtn.disabled = true;
 
+    let structuredTrade = null;
     try {
       const res = await fetch('/api/chat/stream', {
         method: 'POST',
@@ -1453,6 +1504,12 @@
           botDiv.classList.add('error');
           return 'error';
         }
+        if (obj.trade && typeof obj.trade === 'object') {
+          structuredTrade = obj.trade;
+          setTyping(botDiv, false);
+          renderTradeCard(botDiv, obj.trade);
+          scrollChatToBottom();
+        }
         if (typeof obj.c === 'string' && obj.c) {
           if (!gotChunk) {
             gotChunk = true;
@@ -1464,6 +1521,10 @@
           scrollChatToBottom();
         }
         if (obj.done) {
+          if (obj.trade && typeof obj.trade === 'object') {
+            structuredTrade = obj.trade;
+            renderTradeCard(botDiv, obj.trade);
+          }
           setTyping(botDiv, false);
           botDiv.classList.remove('streaming');
         }
@@ -1501,7 +1562,11 @@
         botDiv.querySelector('.content').innerHTML = formatContent('(Empty reply.)');
       }
       conversation.push({ role: 'assistant', content: stored });
-      maybeCaptureStance(stored);
+      if (structuredTrade) {
+        maybeCaptureStanceFromTrade(structuredTrade);
+      } else {
+        maybeCaptureStance(stored);
+      }
       persistChatSessions();
       pendingAttachments = [];
       renderAttachChips();

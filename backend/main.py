@@ -2,8 +2,10 @@
 Free crypto-focused AI chatbot backend.
 Uses Groq (free cloud) if GROQ_API_KEY is set; otherwise Ollama (local).
 """
+import asyncio
 import json
 import os
+import re
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
@@ -17,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .news import fetch_news_snapshot_for_llm, get_fed_news_api_payload, get_news_api_payload, llm_news_grounding_note
+from .llm_tools import GROQ_TOOLS, execute_tool, normalize_trade_card
 from .prices import (
     default_prices_grounding_note,
     fetch_live_price_snapshot,
@@ -47,6 +50,14 @@ try:
 except ValueError:
     LLM_MAX_TOKENS = 4096
 
+_llm_tools_raw = os.getenv("LLM_TOOLS", "1").strip().lower()
+LLM_TOOLS_ENABLED = _llm_tools_raw not in ("0", "false", "no", "off")
+_llm_tool_rounds_raw = os.getenv("LLM_MAX_TOOL_ROUNDS", "6").strip()
+try:
+    LLM_MAX_TOOL_ROUNDS = max(1, min(12, int(_llm_tool_rounds_raw)))
+except ValueError:
+    LLM_MAX_TOOL_ROUNDS = 6
+
 SYSTEM_PROMPT = """You are Crypto ChatPal, a direct crypto market analyst. Be clear, specific, and practical. No fluff.
 
 Core behavior:
@@ -56,18 +67,22 @@ Core behavior:
 - You ARE allowed to give a directional trading opinion when asked (buy / sell / hold), but present it as probabilistic analysis, never certainty.
 - Follow Grounding rules (below) for every factual claim about live markets, current prices, or news in this session.
 - If injected data is missing or stale, say so explicitly and lower confidence; never fill gaps with invented numbers or headlines.
-- Use only available evidence: user messages, attached files, and the injected system blocks (live prices, headlines, grounding notes). Treat those blocks as the only authoritative numbers and story list; do not invent prices, dates, or headlines.
-- If data is missing or stale, explicitly say so and lower confidence.
+- Use only available evidence: user messages, attached files, injected system blocks (live prices, headlines, grounding notes), and tool results you receive in this turn. Treat those as authoritative for numbers and headlines; do not invent prices, dates, or stories.
 - Respond in the same language as the user unless they ask otherwise.
+
+Tools (when the API exposes them to you):
+- You may call tools to fetch CoinGecko USD prices, pull more crypto RSS headlines, or load a macro bundle (oil/metals + Fed-tagged headlines). Use tools when the user needs assets or stories beyond the initial injected blocks, or asks for refreshed/specialized data.
+- For trading or investment action (buy/sell/hold, sizing, plan), call emit_trade_analysis once with structured fields, then still write a clear natural-language answer for the user.
 
 Grounding rules (strict — read before answering):
 - What counts as "in context" for live/session-specific claims:
   1) Injected system messages in this request: optional grounding manifest (what is attached + freshness), optional USD spot snapshot (CoinGecko, default watchlist only), optional RSS headline list (each line: source, title, snippet, URL).
   2) The user's messages, including any pasted or attached file text they sent in this chat.
-- General crypto education (definitions, how protocols work, historical patterns as concepts) may use broad knowledge, but you must not present it as today's live price or a real headline unless that exact fact appears in (1) or (2). When mixing, label briefly: e.g. "From the price snapshot:" / "From headlines:" / "General concept (not from live feed):".
-- Forbidden: fabricating USD prices, 24h % moves, dates/times of news, headline wording, outlet names, article URLs, or "the data shows X" when X is not in (1)–(2). Do not imply you saw the full article body unless the user pasted it.
+  3) Tool JSON you receive in this same request after calling get_prices, get_crypto_headlines, or get_macro_snapshot.
+- General crypto education (definitions, how protocols work, historical patterns as concepts) may use broad knowledge, but you must not present it as today's live price or a real headline unless that exact fact appears in (1)–(3). When mixing, label briefly: e.g. "From the price snapshot:" / "From headlines:" / "General concept (not from live feed):".
+- Forbidden: fabricating USD prices, 24h % moves, dates/times of news, headline wording, outlet names, article URLs, or "the data shows X" when X is not in (1)–(3). Do not imply you saw the full article body unless the user pasted it.
 - Asset scope: the spot block only covers coins listed in that snapshot. If the user asks about another asset, say it is outside the injected watchlist unless they supplied a price in chat; do not guess a spot price.
-- Headlines: only discuss stories that appear in the headline block; attribute with source and use the provided link when pointing to a story. Do not invent related stories.
+- Headlines: only discuss stories from the injected headline block or from get_crypto_headlines tool output; attribute with source and use the provided link when pointing to a story. Do not invent related stories.
 - Staleness: the manifest and context-anchor time describe recency. If data may be outdated for a fast market, say that and soften time-sensitive claims.
 - Contradictions: if user text conflicts with an injected snapshot, call it out and prefer the snapshot for numbers unless the user clearly gives a newer figure as their own input.
 
@@ -139,18 +154,11 @@ Response discipline:
 - Keep answers short, structured, and numeric where possible.
 
 Smarter reasoning (internal; keep the reply concise):
-1) Parse the ask: trade idea vs education vs news vs portfolio — answer that shape first.
-2) Apply Grounding rules: every number (price, %, date, metric) must trace to user text or injected blocks, or say it is not in context and do not guess.
-3) If price snapshot and headlines conflict (e.g. bullish news vs weak price), state the tension and lower confidence instead of forcing one narrative.
-4) One clarifying question only when the answer would change materially; otherwise state your assumption in one line.
-5) Before a strong view, check it still holds using only injected data plus user text; if not, soften or recommend wait.
-6) For multi-part questions, answer each part explicitly (numbered or short headers).
-Reasoning discipline (internal; keep the reply concise):
 1) Classify: trade action vs education vs news vs portfolio — lead with what they asked.
-2) Ground every number (price, %, date) in user text, attachments, or injected blocks; otherwise say it is not in context.
-3) If prices and headlines disagree, state the tension and reduce confidence instead of forcing one narrative.
+2) Apply Grounding rules: every number (price, %, date, metric) must trace to user text, attachments, injected blocks, or tool output; otherwise say it is not in context and do not guess.
+3) If prices and headlines conflict, state the tension and lower confidence instead of forcing one narrative.
 4) Ask at most one clarifying question when it would materially change the answer; else state one-line assumptions.
-5) Before a strong view, check it still holds using only injected data; if not, soften or recommend wait.
+5) Before a strong view, check it still holds using only available data; if not, soften or recommend wait.
 6) Multi-part questions: answer each part with a short header or number.
 
 Quality bar:
@@ -172,12 +180,15 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     message: str
     model: str
+    trade: dict | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if USE_GROQ:
         print("Using Groq (free cloud). No Ollama needed.")
+        if LLM_TOOLS_ENABLED:
+            print("Groq tool calling enabled (set LLM_TOOLS=0 in .env to disable).")
     else:
         try:
             async with httpx.AsyncClient() as client:
@@ -244,6 +255,98 @@ def _ollama_options() -> dict:
     return {"temperature": LLM_TEMPERATURE, "num_predict": LLM_MAX_TOKENS}
 
 
+def _groq_retry_after_seconds(response: httpx.Response) -> float | None:
+    ra = response.headers.get("retry-after")
+    if ra:
+        try:
+            return min(float(ra), 120.0)
+        except ValueError:
+            pass
+    text = response.text or ""
+    m = re.search(r"try again in ([\d.]+)\s*s", text, re.I)
+    if m:
+        return min(float(m.group(1)) + 0.35, 120.0)
+    return None
+
+
+async def _groq_post_chat_completion(client: httpx.AsyncClient, payload: dict) -> httpx.Response:
+    """POST chat completions; on 429 wait once and retry (helps with Groq TPM bursts)."""
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    r = await client.post(url, headers=headers, json=payload)
+    if r.status_code == 429:
+        wait = _groq_retry_after_seconds(r)
+        if wait is not None:
+            await asyncio.sleep(wait)
+            r = await client.post(url, headers=headers, json=payload)
+    return r
+
+
+async def _groq_complete_multistep(client: httpx.AsyncClient, messages: list[dict]) -> tuple[str, str, dict | None]:
+    """Groq chat with optional tool loop; returns (assistant text, model id, optional trade dict from emit_trade_analysis)."""
+    msgs: list[dict] = [dict(x) for x in messages]
+    trade_card: dict | None = None
+    model_out = GROQ_MODEL
+    max_rounds = LLM_MAX_TOOL_ROUNDS if LLM_TOOLS_ENABLED else 1
+
+    for _ in range(max_rounds):
+        payload: dict = {
+            "model": GROQ_MODEL,
+            "messages": msgs,
+            "temperature": LLM_TEMPERATURE,
+            "max_tokens": LLM_MAX_TOKENS,
+        }
+        if LLM_TOOLS_ENABLED:
+            payload["tools"] = GROQ_TOOLS
+            payload["tool_choice"] = "auto"
+
+        r = await _groq_post_chat_completion(client, payload)
+        r.raise_for_status()
+        data = r.json()
+        choice0 = (data.get("choices") or [{}])[0]
+        model_out = data.get("model") or GROQ_MODEL
+        msg = choice0.get("message") or {}
+        tcalls = msg.get("tool_calls")
+
+        if tcalls:
+            if not LLM_TOOLS_ENABLED:
+                return (
+                    "Tools are disabled on the server; answer using only injected context.",
+                    model_out,
+                    trade_card,
+                )
+            assistant_msg: dict = {"role": "assistant", "content": msg.get("content"), "tool_calls": tcalls}
+            msgs.append(assistant_msg)
+            for tc in tcalls:
+                if not isinstance(tc, dict):
+                    continue
+                fn = tc.get("function") or {}
+                name = (fn.get("name") or "").strip()
+                args = fn.get("arguments")
+                if not isinstance(args, str):
+                    args = json.dumps(args) if args is not None else "{}"
+                tid = tc.get("id") or ""
+                if name == "emit_trade_analysis":
+                    try:
+                        parsed = json.loads(args)
+                        if isinstance(parsed, dict):
+                            trade_card = normalize_trade_card(parsed)
+                    except json.JSONDecodeError:
+                        pass
+                tool_text = await execute_tool(name, args)
+                msgs.append({"role": "tool", "tool_call_id": tid, "content": tool_text})
+            continue
+
+        content = (msg.get("content") or "").strip()
+        return content, model_out, trade_card
+
+    return (
+        "I hit the tool-step limit; please ask a shorter question or try again.",
+        model_out,
+        trade_card,
+    )
+
+
 @app.get("/api/prices")
 async def api_prices(
     ids: str | None = Query(
@@ -300,22 +403,10 @@ async def chat(req: ChatRequest):
     )
 
     if USE_GROQ:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=120.0) as client:
             try:
-                r = await client.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-                    json={
-                        "model": GROQ_MODEL,
-                        "messages": messages,
-                        "temperature": LLM_TEMPERATURE,
-                        "max_tokens": LLM_MAX_TOKENS,
-                    },
-                )
-                r.raise_for_status()
-                data = r.json()
-                content = (data.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
-                return ChatResponse(message=content, model=data.get("model", GROQ_MODEL))
+                content, model_used, trade = await _groq_complete_multistep(client, messages)
+                return ChatResponse(message=content, model=model_used, trade=trade)
             except httpx.HTTPStatusError as e:
                 detail = e.response.text
                 if e.response.status_code == 401:
@@ -356,47 +447,31 @@ async def _stream_chat_ndjson(messages: list[dict]) -> AsyncIterator[bytes]:
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             if USE_GROQ:
-                async with client.stream(
-                    "POST",
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-                    json={
-                        "model": GROQ_MODEL,
-                        "messages": messages,
-                        "stream": True,
-                        "temperature": LLM_TEMPERATURE,
-                        "max_tokens": LLM_MAX_TOKENS,
-                    },
-                ) as r:
-                    if r.status_code != 200:
-                        raw = (await r.aread()).decode(errors="replace")
-                        try:
-                            err_j = json.loads(raw)
-                            detail = err_j.get("error", {}).get("message") or raw
-                        except json.JSONDecodeError:
-                            detail = raw or r.reason_phrase
-                        if r.status_code == 401:
-                            detail = "Invalid GROQ_API_KEY. Get a free key at https://console.groq.com"
-                        yield _ndjson_line({"error": detail})
-                        return
-                    async for line in r.aiter_lines():
-                        if not line or line.startswith(":"):
-                            continue
-                        if not line.startswith("data: "):
-                            continue
-                        payload = line[6:].strip()
-                        if payload == "[DONE]":
-                            break
-                        try:
-                            obj = json.loads(payload)
-                        except json.JSONDecodeError:
-                            continue
-                        choice0 = (obj.get("choices") or [{}])[0]
-                        delta = choice0.get("delta") or {}
-                        piece = delta.get("content") or ""
-                        if piece:
-                            yield _ndjson_line({"c": piece})
-                    yield _ndjson_line({"done": True, "model": GROQ_MODEL})
+                try:
+                    content, model_used, trade = await _groq_complete_multistep(client, messages)
+                except httpx.HTTPStatusError as e:
+                    raw = e.response.text
+                    try:
+                        err_j = json.loads(raw)
+                        detail = err_j.get("error", {}).get("message") or raw
+                    except json.JSONDecodeError:
+                        detail = raw or str(e)
+                    if e.response.status_code == 401:
+                        detail = "Invalid GROQ_API_KEY. Get a free key at https://console.groq.com"
+                    yield _ndjson_line({"error": detail})
+                    return
+                except Exception as e:
+                    yield _ndjson_line({"error": str(e)})
+                    return
+                if trade:
+                    yield _ndjson_line({"trade": trade})
+                chunk_size = 48
+                if not content:
+                    yield _ndjson_line({"c": "(No text returned.)"})
+                else:
+                    for i in range(0, len(content), chunk_size):
+                        yield _ndjson_line({"c": content[i : i + chunk_size]})
+                yield _ndjson_line({"done": True, "model": model_used, "trade": trade})
             else:
                 model_out = OLLAMA_MODEL
                 async with client.stream(

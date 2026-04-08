@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#161a22" />
+  <meta name="description" content="Crypto-focused AI chat with live prices and RSS news" />
+  <link rel="manifest" href="/manifest.json" />
   <title>Crypto ChatPal</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any" />
   <link rel="alternate icon" href="/favicon.ico" />
@@ -18,7 +21,7 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="css/style.css?v=20260404-1" />
+  <link rel="stylesheet" href="css/style.css?v=20260404-2" />
 </head>
 <body>
   <header>
@@ -198,7 +201,10 @@
               Edit list
             </button>
           </div>
-          <span class="sub" id="prices-updated">Loading…</span>
+          <div class="prices-live-row">
+            <span class="sub" id="prices-updated">Loading…</span>
+            <span id="live-feed-status" class="live-feed-status" role="status" aria-live="polite"></span>
+          </div>
         </div>
         <div class="macro-top" aria-label="Macro indicators">
           <section class="macro-card" aria-label="Commodities prices">
@@ -331,6 +337,6 @@
     </aside>
   </div>
 
-  <script src="js/app.js?v=20260404-1" defer></script>
+  <script src="js/app.js?v=20260404-2" defer></script>
 </body>
 </html>

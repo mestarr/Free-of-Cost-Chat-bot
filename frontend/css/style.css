@@ -901,6 +901,48 @@ html[data-theme='light'] .msg .trade-card {
   color: var(--muted);
 }
 
+.prices-live-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin-top: 0.15rem;
+}
+
+.live-feed-status {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--surface);
+}
+
+.live-feed-status.live-feed--live {
+  color: var(--positive);
+  border-color: rgba(61, 214, 140, 0.45);
+  background: rgba(61, 214, 140, 0.12);
+}
+
+.live-feed-status.live-feed--poll {
+  color: var(--muted);
+}
+
+.live-feed-status.live-feed--warn {
+  color: #e6c35c;
+  border-color: rgba(230, 195, 92, 0.4);
+  background: rgba(230, 195, 92, 0.1);
+}
+
+html[data-theme='light'] .live-feed-status.live-feed--live {
+  border-color: rgba(11, 122, 82, 0.35);
+  background: rgba(11, 122, 82, 0.12);
+  color: var(--positive);
+}
+
 .prices-edit-toggle {
   flex-shrink: 0;
   font-family: inherit;

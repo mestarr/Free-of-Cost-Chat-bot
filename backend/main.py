@@ -26,6 +26,7 @@ from .prices import (
     fetch_oil_prices_json,
     fetch_prices_json,
 )
+from .realtime import router as realtime_router
 
 # Load project-root .env (same folder as backend/)
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -35,6 +36,15 @@ FRONTEND_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "f
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 # Smaller = faster; larger instruct models (e.g. llama-3.3-70b-versatile on Groq) trade speed for depth.
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+# On 429 (TPM/TPD), retry once with this model if it differs from GROQ_MODEL. Set to empty or 0 to disable.
+_fb_raw = os.getenv("GROQ_MODEL_FALLBACK", "llama-3.1-8b-instant").strip()
+_fb_lower = _fb_raw.lower()
+if not _fb_raw or _fb_lower in ("0", "false", "off", "none", "disable"):
+    GROQ_MODEL_FALLBACK = ""
+elif _fb_raw == GROQ_MODEL:
+    GROQ_MODEL_FALLBACK = ""
+else:
+    GROQ_MODEL_FALLBACK = _fb_raw
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 USE_GROQ = bool(GROQ_API_KEY)
@@ -189,6 +199,8 @@ async def lifespan(app: FastAPI):
         print("Using Groq (free cloud). No Ollama needed.")
         if LLM_TOOLS_ENABLED:
             print("Groq tool calling enabled (set LLM_TOOLS=0 in .env to disable).")
+        if GROQ_MODEL_FALLBACK:
+            print(f"Groq rate-limit fallback model: {GROQ_MODEL_FALLBACK} (set GROQ_MODEL_FALLBACK=0 to disable).")
     else:
         try:
             async with httpx.AsyncClient() as client:
@@ -208,6 +220,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(realtime_router)
 
 
 def _build_messages(
@@ -270,28 +284,71 @@ def _groq_retry_after_seconds(response: httpx.Response) -> float | None:
 
 
 async def _groq_post_chat_completion(client: httpx.AsyncClient, payload: dict) -> httpx.Response:
-    """POST chat completions; on 429 wait once and retry (helps with Groq TPM bursts)."""
+    """POST chat completions. On 429: try smaller model for daily/long waits; short TPM wait+retry."""
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    r = await client.post(url, headers=headers, json=payload)
-    if r.status_code == 429:
-        wait = _groq_retry_after_seconds(r)
-        if wait is not None:
-            await asyncio.sleep(wait)
-            r = await client.post(url, headers=headers, json=payload)
+
+    async def post_model(model_id: str) -> httpx.Response:
+        body = dict(payload)
+        body["model"] = model_id
+        return await client.post(url, headers=headers, json=body)
+
+    primary = payload.get("model") or GROQ_MODEL
+    r = await post_model(primary)
+
+    if r.status_code != 429:
+        return r
+
+    err_lower = (r.text or "").lower()
+    wait = _groq_retry_after_seconds(r)
+    daily_quota = "tokens per day" in err_lower or "token per day" in err_lower
+
+    if GROQ_MODEL_FALLBACK and primary != GROQ_MODEL_FALLBACK and (
+        daily_quota or (wait is not None and wait > 90)
+    ):
+        r2 = await post_model(GROQ_MODEL_FALLBACK)
+        if r2.status_code == 200:
+            return r2
+        r = r2
+
+    if r.status_code == 429 and wait is not None and wait <= 120:
+        await asyncio.sleep(wait)
+        r = await post_model(primary)
+
+    if r.status_code == 429 and GROQ_MODEL_FALLBACK and primary != GROQ_MODEL_FALLBACK:
+        r = await post_model(GROQ_MODEL_FALLBACK)
+
     return r
+
+
+def _groq_user_facing_error(status_code: int, body: str) -> str:
+    """Short hint when Groq returns quota / rate errors."""
+    if status_code != 429:
+        return body
+    low = body.lower()
+    hint = (
+        "\n\n— Tip: Large models (e.g. llama-3.3-70b) hit **daily (TPD) and per-minute (TPM)** caps quickly on the free tier. "
+        "Set `GROQ_MODEL=llama-3.1-8b-instant` in `.env`, or keep `GROQ_MODEL_FALLBACK` so the app can auto-switch. "
+        "See https://console.groq.com/settings/billing"
+    )
+    if "tokens per day" in low or "token per day" in low:
+        return body + hint
+    if "tokens per minute" in low or " tpm" in low:
+        return body + hint
+    return body + hint
 
 
 async def _groq_complete_multistep(client: httpx.AsyncClient, messages: list[dict]) -> tuple[str, str, dict | None]:
     """Groq chat with optional tool loop; returns (assistant text, model id, optional trade dict from emit_trade_analysis)."""
     msgs: list[dict] = [dict(x) for x in messages]
     trade_card: dict | None = None
+    active_model = GROQ_MODEL
     model_out = GROQ_MODEL
     max_rounds = LLM_MAX_TOOL_ROUNDS if LLM_TOOLS_ENABLED else 1
 
     for _ in range(max_rounds):
         payload: dict = {
-            "model": GROQ_MODEL,
+            "model": active_model,
             "messages": msgs,
             "temperature": LLM_TEMPERATURE,
             "max_tokens": LLM_MAX_TOKENS,
@@ -304,7 +361,8 @@ async def _groq_complete_multistep(client: httpx.AsyncClient, messages: list[dic
         r.raise_for_status()
         data = r.json()
         choice0 = (data.get("choices") or [{}])[0]
-        model_out = data.get("model") or GROQ_MODEL
+        model_out = data.get("model") or active_model
+        active_model = model_out
         msg = choice0.get("message") or {}
         tcalls = msg.get("tool_calls")
 
@@ -411,6 +469,8 @@ async def chat(req: ChatRequest):
                 detail = e.response.text
                 if e.response.status_code == 401:
                     detail = "Invalid GROQ_API_KEY. Get a free key at https://console.groq.com"
+                else:
+                    detail = _groq_user_facing_error(e.response.status_code, detail)
                 raise HTTPException(status_code=e.response.status_code, detail=detail)
     else:
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -458,6 +518,8 @@ async def _stream_chat_ndjson(messages: list[dict]) -> AsyncIterator[bytes]:
                         detail = raw or str(e)
                     if e.response.status_code == 401:
                         detail = "Invalid GROQ_API_KEY. Get a free key at https://console.groq.com"
+                    else:
+                        detail = _groq_user_facing_error(e.response.status_code, detail)
                     yield _ndjson_line({"error": detail})
                     return
                 except Exception as e:

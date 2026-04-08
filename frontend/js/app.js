@@ -342,6 +342,11 @@
   let lastRenderKey = '';
   let lastNewsItems = [];
 
+  let liveFeedMode = 'connecting';
+  let liveWs = null;
+  let liveWsBackoffMs = 2000;
+  const liveFeedStatusEl = document.getElementById('live-feed-status');
+
   const STANCE_LEDGER_KEY = 'cryptochatpal_stance_ledger';
   const MAX_STANCE_ENTRIES = 24;
 
@@ -872,6 +877,7 @@
     lastRenderKey = '';
     renderPortfolioEditorRows();
     loadPrices();
+    sendLiveSubscribe();
   }
 
   function renderPrices(data) {
@@ -972,6 +978,7 @@
     renderEditorRows();
     renderPrices(lastPricesPayload);
     loadPrices();
+    sendLiveSubscribe();
   }
 
   if (pricesEditorRows) {
@@ -1144,7 +1151,13 @@
 
   renderPortfolioView({});
   loadPrices();
-  setInterval(loadPrices, 60000);
+  setInterval(function ccpPriceHttpFallback() {
+    if (liveFeedMode === 'live') return;
+    loadPrices();
+  }, 45000);
+  setInterval(function ccpPriceResyncWs() {
+    if (liveFeedMode === 'live') loadPrices();
+  }, 600000);
 
   function formatUtcLabel(ts) {
     if (!ts) return '';
@@ -1367,8 +1380,88 @@
     }
   }
 
+  function setLiveFeedStatus(mode, titleHint) {
+    liveFeedMode = mode;
+    if (!liveFeedStatusEl) return;
+    liveFeedStatusEl.classList.remove('live-feed--live', 'live-feed--poll', 'live-feed--warn');
+    let label = '';
+    if (mode === 'live') {
+      liveFeedStatusEl.classList.add('live-feed--live');
+      label = 'Realtime';
+      liveFeedStatusEl.title = titleHint || 'WebSocket feed active (~1s prices)';
+    } else if (mode === 'connecting') {
+      liveFeedStatusEl.classList.add('live-feed--warn');
+      label = 'Connecting…';
+      liveFeedStatusEl.title = titleHint || 'Connecting to live feed';
+    } else {
+      liveFeedStatusEl.classList.add('live-feed--poll');
+      label = 'Polling';
+      liveFeedStatusEl.title = titleHint || 'Using HTTP refresh (fallback)';
+    }
+    liveFeedStatusEl.textContent = label;
+  }
+
+  function liveWsUrl() {
+    const p = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return p + '//' + location.host + '/api/ws/live';
+  }
+
+  function sendLiveSubscribe() {
+    if (!liveWs || liveWs.readyState !== WebSocket.OPEN) return;
+    try {
+      liveWs.send(JSON.stringify({ type: 'subscribe', ids: buildCombinedIdsQuery() }));
+    } catch (err) {}
+  }
+
+  function connectLiveFeed() {
+    if (!('WebSocket' in window)) {
+      setLiveFeedStatus('polling');
+      return;
+    }
+    try {
+      liveWs = new WebSocket(liveWsUrl());
+    } catch (e) {
+      setLiveFeedStatus('polling');
+      return;
+    }
+    setLiveFeedStatus('connecting');
+    liveWs.onopen = () => {
+      liveWsBackoffMs = 2000;
+      setLiveFeedStatus('live');
+      sendLiveSubscribe();
+    };
+    liveWs.onmessage = (ev) => {
+      let msg;
+      try {
+        msg = JSON.parse(ev.data);
+      } catch (x) {
+        return;
+      }
+      if (!msg || !msg.type) return;
+      if (msg.type === 'prices' && msg.data && typeof msg.data === 'object') {
+        renderPrices(msg.data);
+      } else if (msg.type === 'news' && msg.data) {
+        renderNews(msg.data);
+      } else if (msg.type === 'macro') {
+        if (msg.oil) renderOil(msg.oil);
+        if (msg.fed) renderFedNews(msg.fed);
+      }
+    };
+    liveWs.onerror = () => {};
+    liveWs.onclose = () => {
+      liveWs = null;
+      setLiveFeedStatus('connecting', 'Reconnecting…');
+      setTimeout(connectLiveFeed, liveWsBackoffMs);
+      liveWsBackoffMs = Math.min(liveWsBackoffMs * 2, 60000);
+    };
+  }
+
   loadNews();
-  setInterval(loadNews, 120000);
+  setInterval(function ccpNewsHttpFallback() {
+    if (liveFeedMode === 'live') return;
+    loadNews();
+  }, 120000);
+  connectLiveFeed();
 
   function formatContent(text) {
     return text
@@ -1736,4 +1829,15 @@
   renderConversation(conversation);
   renderHistoryList();
   updateSessionDeskUI();
+
+  window.addEventListener('online', () => {
+    sendLiveSubscribe();
+    if (liveFeedMode !== 'live') loadPrices();
+  });
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    });
+  }
 })();

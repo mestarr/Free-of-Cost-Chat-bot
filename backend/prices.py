@@ -11,9 +11,12 @@ the default list (also used for the chat system snapshot).
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
+
+from . import observability
+from .redis_cache import REDIS_URL, cache_get_json, cache_set_json
 
 # CoinGecko `ids` (not symbols). Extend as needed.
 DEFAULT_IDS = (
@@ -37,6 +40,7 @@ TTL_SECONDS = float(os.getenv("PRICE_CACHE_SECONDS", "10"))
 OIL_TTL_SECONDS = float(os.getenv("OIL_CACHE_SECONDS", "300"))
 MAX_IDS_PER_REQUEST = 40
 MAX_CACHE_BUCKETS = 24
+_PRICE_REDIS_PREFIX = "ccp:price:v1:"
 
 # bucket_key (sorted ids joined) -> {"ts": float, "data": dict | None}
 _caches: dict[str, dict] = {}
@@ -100,8 +104,8 @@ def _snapshot_from_data(data: dict) -> str:
 
     return (
         "Live market snapshot (spot prices in USD from CoinGecko; refreshed periodically). "
-        "When the user asks for current prices, quote these numbers and say they are approximate spot prices, not a trading recommendation.\n"
-        + "\n".join(lines)
+        "When the user asks for current prices, quote these numbers and say they are approximate spot prices, "
+        "not a trading recommendation.\n" + "\n".join(lines)
     )
 
 
@@ -139,8 +143,19 @@ async def get_price_data(ids_csv: str | None = None) -> dict:
     now = time.time()
     ent = _caches.get(bucket)
     if ent and ent.get("data") is not None and (now - ent["ts"]) < TTL_SECONDS:
+        observability.inc_counter("price_cache_hit")
         return ent["data"]
 
+    if REDIS_URL:
+        rkey = _PRICE_REDIS_PREFIX + bucket
+        rd = await cache_get_json(rkey)
+        if rd and isinstance(rd, dict) and rd:
+            _evict_oldest_cache()
+            _caches[bucket] = {"ts": now, "data": rd}
+            observability.inc_counter("price_cache_hit")
+            return rd
+
+    observability.inc_counter("price_cache_miss")
     try:
         data = await _fetch_upstream(fetch_part)
         if data is None:
@@ -149,6 +164,8 @@ async def get_price_data(ids_csv: str | None = None) -> dict:
             return {}
         _evict_oldest_cache()
         _caches[bucket] = {"ts": now, "data": data}
+        if REDIS_URL:
+            await cache_set_json(_PRICE_REDIS_PREFIX + bucket, data, int(max(1, TTL_SECONDS)))
         return data
     except Exception:
         if ent and ent.get("data") is not None:
@@ -237,7 +254,7 @@ async def _fetch_oil_prices_upstream() -> dict:
             {"symbol": "SI=F", "label": "Silver", "usd": None, "change_pct": None},
         ]
     return {
-        "fetched_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "fetched_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "items": out,
     }
 

@@ -1,0 +1,21 @@
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Set REDIS_URL=redis://redis:6379/0 when using the cache profile.
+      REDIS_URL: ${REDIS_URL:-}
+
+  redis:
+    image: redis:7-alpine
+    profiles: [cache]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5

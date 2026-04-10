@@ -12,12 +12,15 @@ import os
 import re
 import time
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+
+from . import observability
+from .redis_cache import REDIS_URL, cache_get_json, cache_set_json
 
 USER_AGENT = os.getenv(
     "NEWS_USER_AGENT",
@@ -41,6 +44,7 @@ MAX_HEADLINES_LLM = int(os.getenv("NEWS_MAX_HEADLINES_LLM", "18"))
 
 _cache: dict[str, Any] = {"ts": 0.0, "items": [], "fetched_at": ""}
 _fed_cache: dict[str, Any] = {"ts": 0.0, "items": [], "fetched_at": ""}
+_NEWS_REDIS_KEY = "ccp:news:v1"
 
 _POS = re.compile(
     r"\b(surge|surges|rally|rallies|gain|gains|rise|rose|risen|jump|jumps|record|high|approve|approved|"
@@ -147,7 +151,13 @@ def _parse_rss(xml_bytes: bytes, source: str) -> list[dict[str, Any]]:
 
 async def _fetch_feed(client: httpx.AsyncClient, source: str, url: str, cap: int) -> list[dict[str, Any]]:
     try:
-        r = await client.get(url, headers={"User-Agent": USER_AGENT, "Accept": "application/rss+xml, application/xml, text/xml, */*"})
+        r = await client.get(
+            url,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/rss+xml, application/xml, text/xml, */*",
+            },
+        )
         if r.status_code != 200:
             return []
         items = _parse_rss(r.content, source)[:cap]
@@ -167,8 +177,19 @@ def _norm_link(u: str) -> str:
 async def get_news_items() -> list[dict[str, Any]]:
     now = time.time()
     if _cache["items"] and (now - _cache["ts"]) < TTL_SECONDS:
+        observability.inc_counter("news_cache_hit")
         return _cache["items"]
 
+    if REDIS_URL:
+        blob = await cache_get_json(_NEWS_REDIS_KEY)
+        if isinstance(blob, dict) and isinstance(blob.get("items"), list):
+            _cache["ts"] = now
+            _cache["items"] = blob["items"]
+            _cache["fetched_at"] = str(blob.get("fetched_at") or "")
+            observability.inc_counter("news_cache_hit")
+            return _cache["items"]
+
+    observability.inc_counter("news_cache_miss")
     merged: list[dict[str, Any]] = []
     async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
         for source, url, cap in DEFAULT_FEEDS:
@@ -185,7 +206,13 @@ async def get_news_items() -> list[dict[str, Any]]:
 
     _cache["ts"] = now
     _cache["items"] = deduped
-    _cache["fetched_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _cache["fetched_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if REDIS_URL:
+        await cache_set_json(
+            _NEWS_REDIS_KEY,
+            {"items": deduped, "fetched_at": _cache["fetched_at"]},
+            int(max(1, TTL_SECONDS)),
+        )
     return deduped
 
 
@@ -215,8 +242,9 @@ async def fetch_news_snapshot_for_llm() -> str:
         return ""
 
     lines: list[str] = [
-        "Recent headlines from RSS (CoinDesk, Decrypt, BeInCrypto when reachable). Summarize accurately, name the source for each story, "
-        "and do not invent stories. These are not financial advice. Prefer linking users to the article URL.\n"
+        "Recent headlines from RSS (CoinDesk, Decrypt, BeInCrypto when reachable). "
+        "Summarize accurately, name the source for each story, and do not invent stories. "
+        "These are not financial advice. Prefer linking users to the article URL.\n"
     ]
     for it in items[:MAX_HEADLINES_LLM]:
         t = it["title"].replace("\n", " ")
@@ -254,7 +282,7 @@ async def get_fed_news_items() -> list[dict[str, Any]]:
 
     _fed_cache["ts"] = now
     _fed_cache["items"] = deduped
-    _fed_cache["fetched_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _fed_cache["fetched_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     return deduped
 
 

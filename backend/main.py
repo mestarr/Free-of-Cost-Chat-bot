@@ -68,30 +68,41 @@ except ValueError:
 
 # Groq free/on-demand tiers often cap a single request at ~6000 tokens (prompt + max_tokens + tool schemas).
 # Default completion cap stays well below LLM_MAX_TOKENS so prompt + requested output fits.
-_groq_cap_raw = os.getenv("GROQ_MAX_COMPLETION_TOKENS", "1536").strip()
+_groq_cap_raw = os.getenv("GROQ_MAX_COMPLETION_TOKENS", "1024").strip()
 try:
     GROQ_MAX_COMPLETION_TOKENS = max(256, min(8192, int(_groq_cap_raw)))
 except ValueError:
-    GROQ_MAX_COMPLETION_TOKENS = 1536
+    GROQ_MAX_COMPLETION_TOKENS = 1024
 _groq_req_raw = os.getenv("GROQ_PER_REQUEST_TOKEN_LIMIT", "6000").strip()
 try:
     GROQ_PER_REQUEST_TOKEN_LIMIT = max(1024, min(200_000, int(_groq_req_raw)))
 except ValueError:
     GROQ_PER_REQUEST_TOKEN_LIMIT = 6000
-_groq_tool_cap_raw = os.getenv("GROQ_MAX_TOOL_RESPONSE_CHARS", "12000").strip()
+_groq_tool_cap_raw = os.getenv("GROQ_MAX_TOOL_RESPONSE_CHARS", "9000").strip()
 try:
     GROQ_MAX_TOOL_RESPONSE_CHARS = max(2000, min(100_000, int(_groq_tool_cap_raw)))
 except ValueError:
-    GROQ_MAX_TOOL_RESPONSE_CHARS = 12_000
+    GROQ_MAX_TOOL_RESPONSE_CHARS = 9000
+_groq_hist_raw = os.getenv("GROQ_MAX_CHAT_MESSAGES", "4").strip()
+try:
+    GROQ_MAX_CHAT_MESSAGES = max(2, min(48, int(_groq_hist_raw)))
+except ValueError:
+    GROQ_MAX_CHAT_MESSAGES = 4
+_groq_asst_raw = os.getenv("GROQ_MAX_ASSISTANT_CHARS", "3500").strip()
+try:
+    GROQ_MAX_ASSISTANT_CHARS = max(800, min(50_000, int(_groq_asst_raw)))
+except ValueError:
+    GROQ_MAX_ASSISTANT_CHARS = 3500
 
 _GROQ_TOOLS_JSON_LEN: int | None = None
 
 SYSTEM_PROMPT = """You are Crypto ChatPal, a direct crypto market analyst. Be clear, specific, and practical. No fluff.
 
 Core behavior:
+- Format-first (overrides default trade verbosity): If the user limits how they want the answer — e.g. "yes or no", "one word only", "just A or B", "single sentence", "no essay" — your visible reply must obey that first. Use plain text only; do not call emit_trade_analysis; do not use the scorecard / View-Confidence-Score template for that turn unless they also explicitly ask for trade analysis, scores, or a plan. For strict "yes or no", start with exactly "Yes" or "No"; you may add at most one short parenthetical (≤8 words) only if needed for honesty, e.g. "No (wait — weak setup)".
 - Match response shape to intent:
   - Education, definitions, how things work, history, or general discussion: answer directly in plain language. Do not use the full trade scorecard / entry-exit plan unless the user clearly asks for trading or investment action.
-  - Trading or investment action (buy/sell/hold, entries, targets, sizing, "what should I do", portfolio moves): use the full decision framework and structured format below.
+  - Trading or investment action (buy/sell/hold, entries, targets, sizing, "what should I do", portfolio moves): use the full decision framework and structured format below — except when a format-first rule above applies.
 - You ARE allowed to give a directional trading opinion when asked (buy / sell / hold), but present it as probabilistic analysis, never certainty.
 - Follow Grounding rules (below) for every factual claim about live markets, current prices, or news in this session.
 - If injected data is missing or stale, say so explicitly and lower confidence; never fill gaps with invented numbers or headlines.
@@ -100,7 +111,7 @@ Core behavior:
 
 Tools (when the API exposes them to you):
 - You may call tools to fetch CoinGecko USD prices, pull more crypto RSS headlines, or load a macro bundle (oil/metals + Fed-tagged headlines). Use tools when the user needs assets or stories beyond the initial injected blocks, or asks for refreshed/specialized data.
-- For trading or investment action (buy/sell/hold, sizing, plan), call emit_trade_analysis once with structured fields, then still write a clear natural-language answer for the user.
+- For trading or investment action (buy/sell/hold, sizing, plan, scorecard), call emit_trade_analysis once with structured fields, then still write a clear natural-language answer — unless the user message is only a format constraint (yes/no, one word, etc.); then skip tools and emit_trade_analysis entirely.
 
 Grounding rules (strict — read before answering):
 - What counts as "in context" for live/session-specific claims:
@@ -178,11 +189,12 @@ Macro/news checklist:
 
 Response discipline:
 - If confidence < 60, default to Hold/Wait unless user explicitly asks for aggressive mode.
-- Include one "What changes my view" bullet.
+- Include one "What changes my view" bullet (skip if the user forbade extra content, e.g. strict yes/no only).
 - Keep answers short, structured, and numeric where possible.
+- If the user demanded a minimal format, do not open with grounding-manifest recap or a trade card; deliver the constrained answer first.
 
 Smarter reasoning (internal; keep the reply concise):
-1) Classify: trade action vs education vs news vs portfolio — lead with what they asked.
+1) Classify: trade action vs education vs news vs portfolio vs format-only (yes/no, one word) — lead with what they asked; honor format-only before any tool or scorecard.
 2) Apply Grounding rules: every number (price, %, date, metric) must trace to user text, attachments, injected blocks, or tool output; otherwise say it is not in context and do not guess.
 3) If prices and headlines conflict, state the tension and lower confidence instead of forcing one narrative.
 4) Ask at most one clarifying question when it would materially change the answer; else state one-line assumptions.
@@ -286,12 +298,57 @@ async def api_metrics(response_format: str | None = Query(None, alias="format"))
     return {"counters": c, "http_latency_avg_ms": round(avg, 2)}
 
 
+_GROQ_SHORT_USER_HINTS = (
+    "yes or no",
+    "no or yes",
+    "one word",
+    "y/n",
+    "only yes",
+    "only no",
+    "answer with yes",
+    "answer with no",
+    "single sentence",
+    "just yes",
+    "just no",
+    "binary answer",
+    "a or b only",
+)
+
+
+def _last_user_content_from_request(req: ChatRequest) -> str:
+    for m in reversed(req.messages):
+        if m.role == "user":
+            return (m.content or "").strip()
+    return ""
+
+
+def _groq_last_user_text(messages: list[dict]) -> str:
+    for m in reversed(messages):
+        if m.get("role") == "user" and isinstance(m.get("content"), str):
+            return m["content"].strip()
+    return ""
+
+
+def _groq_short_format_turn(user_text: str) -> bool:
+    """Short / format-only user line: omit RSS injection + tools to cut tokens (TPD/TPM)."""
+    u = user_text.strip().lower()
+    if len(u) > 220:
+        return False
+    if any(h in u for h in _GROQ_SHORT_USER_HINTS):
+        return True
+    compact = u.rstrip("?.!").strip()
+    if len(compact) <= 28 and compact in ("yes", "no", "ok", "why", "please", "thanks", "answer", "answer me"):
+        return True
+    return False
+
+
 def _build_messages(
     req: ChatRequest,
     price_snapshot: str = "",
     news_snapshot: str = "",
     price_grounding: str = "",
     news_grounding: str = "",
+    omit_rss_block: bool = False,
 ) -> list[dict]:
     """System prompt + grounding manifest + optional live prices + headlines + conversation history."""
     utc_now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
@@ -313,17 +370,53 @@ def _build_messages(
         manifest_lines.append("Following message: USD spot snapshot (authoritative for listed assets only).")
     else:
         manifest_lines.append("No USD spot snapshot message follows.")
-    if news_snapshot.strip():
+    news_body = "" if omit_rss_block else (news_snapshot or "").strip()
+    if news_body:
         manifest_lines.append("Following message: RSS headline list (authoritative for those stories only).")
+    elif omit_rss_block:
+        manifest_lines.append(
+            "RSS headline list omitted this turn (short / format-only request) to save API tokens; "
+            "use earlier turns if headlines were discussed."
+        )
     else:
         manifest_lines.append("No RSS headline list message follows.")
     out.append({"role": "system", "content": "\n".join(manifest_lines)})
     if price_snapshot:
         out.append({"role": "system", "content": price_snapshot})
-    if news_snapshot:
-        out.append({"role": "system", "content": news_snapshot})
+    if news_body:
+        out.append({"role": "system", "content": news_body})
     for m in req.messages:
         out.append({"role": m.role, "content": m.content})
+    return out
+
+
+def _apply_groq_history_cap(messages: list[dict]) -> list[dict]:
+    """Keep all leading system blocks; drop oldest user/assistant/tool tail items over cap (saves TPM)."""
+    split = 0
+    while split < len(messages) and messages[split].get("role") == "system":
+        split += 1
+    head = messages[:split]
+    tail = messages[split:]
+    if len(tail) <= GROQ_MAX_CHAT_MESSAGES:
+        return [dict(m) for m in messages]
+    kept = tail[-GROQ_MAX_CHAT_MESSAGES :]
+    while kept and kept[0].get("role") == "tool":
+        kept = kept[1:]
+    return [dict(m) for m in head + kept]
+
+
+def _compress_assistant_turns_for_groq(messages: list[dict]) -> list[dict]:
+    """Shorten past assistant text (long trade writeups) while keeping the tail."""
+    out: list[dict] = []
+    for m in messages:
+        mc = dict(m)
+        if mc.get("role") == "assistant" and isinstance(mc.get("content"), str):
+            c = mc["content"]
+            cap = GROQ_MAX_ASSISTANT_CHARS
+            if len(c) > cap:
+                keep = cap - 80
+                mc["content"] = "[…earlier assistant text truncated for rate limits…]\n" + c[-keep:]
+        out.append(mc)
     return out
 
 
@@ -336,6 +429,13 @@ def _groq_tools_overhead_tokens() -> int:
 
 def _groq_max_output_tokens() -> int:
     return max(64, min(LLM_MAX_TOKENS, GROQ_MAX_COMPLETION_TOKENS))
+
+
+def _groq_completion_cap(low_token: bool) -> int:
+    base = _groq_max_output_tokens()
+    if low_token:
+        return max(64, min(base, 384))
+    return base
 
 
 def _groq_estimated_prompt_token_budget() -> int:
@@ -429,10 +529,15 @@ def _groq_api_error_detail(response: httpx.Response) -> str:
     except (json.JSONDecodeError, ValueError, TypeError):
         pass
     dlow = detail.lower()
-    if "tpm" in dlow or "too large" in dlow or "reduce your message" in dlow:
+    if "tokens per day" in dlow:
         detail += (
-            " | Tip: set GROQ_MAX_COMPLETION_TOKENS=1024 (or lower), shorten the thread or paste, "
-            "or reduce NEWS_MAX_HEADLINES_LLM in .env."
+            " | TPD: daily token cap hit. Use GROQ_MODEL=llama-3.1-8b-instant, LLM_TOOLS=0, "
+            "start a new chat, shorten threads (GROQ_MAX_CHAT_MESSAGES), or wait for the reset window."
+        )
+    elif "tpm" in dlow or "too large" in dlow or "reduce your message" in dlow:
+        detail += (
+            " | Tip: lower GROQ_MAX_COMPLETION_TOKENS, set GROQ_MAX_CHAT_MESSAGES=4, "
+            "GROQ_MAX_ASSISTANT_CHARS=2500, or NEWS_MAX_HEADLINES_LLM=8 in .env."
         )
     return detail
 
@@ -455,25 +560,44 @@ def _groq_retry_after_seconds(response: httpx.Response) -> float | None:
     return None
 
 
+def _groq_is_daily_quota_429(response: httpx.Response) -> bool:
+    """Daily TPD limits need a long wait — do not burn retries like TPM bursts."""
+    if response.status_code != 429:
+        return False
+    t = (response.text or "").lower()
+    return "tokens per day" in t
+
+
 async def _groq_post_chat_completion(client: httpx.AsyncClient, payload: dict) -> httpx.Response:
-    """POST chat completions; on 429 wait once and retry (helps with Groq TPM bursts)."""
+    """POST chat completions; on 429 / TPM wait and retry with backoff (not for TPD daily cap)."""
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    r = await client.post(url, headers=headers, json=payload)
-    if r.status_code == 429:
+    max_attempts = 6
+    backoff = 2.0
+    last: httpx.Response | None = None
+    for _attempt in range(max_attempts):
+        r = await client.post(url, headers=headers, json=payload)
+        last = r
+        if r.status_code != 429:
+            return r
+        if _groq_is_daily_quota_429(r):
+            return r
         wait = _groq_retry_after_seconds(r)
-        if wait is not None:
-            await asyncio.sleep(wait)
-            r = await client.post(url, headers=headers, json=payload)
-    return r
+        if wait is None:
+            wait = backoff
+        wait = min(max(wait, 1.5), 90.0)
+        await asyncio.sleep(wait)
+        backoff = min(backoff * 1.75, 45.0)
+    return last  # type: ignore[return-value]
 
 
 async def _groq_complete_multistep(client: httpx.AsyncClient, messages: list[dict]) -> tuple[str, str, dict | None]:
     """Groq chat with optional tool loop; returns (assistant text, model id, optional trade dict from emit_trade_analysis)."""
-    msgs: list[dict] = [dict(x) for x in messages]
+    msgs: list[dict] = _compress_assistant_turns_for_groq(_apply_groq_history_cap([dict(x) for x in messages]))
+    low = _groq_short_format_turn(_groq_last_user_text(msgs))
     trade_card: dict | None = None
     model_out = GROQ_MODEL
-    max_rounds = LLM_MAX_TOOL_ROUNDS if LLM_TOOLS_ENABLED else 1
+    max_rounds = 1 if (low or not LLM_TOOLS_ENABLED) else LLM_MAX_TOOL_ROUNDS
 
     for _ in range(max_rounds):
         msgs = _trim_messages_for_groq(msgs)
@@ -481,9 +605,9 @@ async def _groq_complete_multistep(client: httpx.AsyncClient, messages: list[dic
             "model": GROQ_MODEL,
             "messages": msgs,
             "temperature": LLM_TEMPERATURE,
-            "max_tokens": _groq_max_output_tokens(),
+            "max_tokens": _groq_completion_cap(low),
         }
-        if LLM_TOOLS_ENABLED:
+        if LLM_TOOLS_ENABLED and not low:
             payload["tools"] = GROQ_TOOLS
             payload["tool_choice"] = "auto"
 
@@ -543,7 +667,7 @@ async def _groq_complete_multistep(client: httpx.AsyncClient, messages: list[dic
         "model": GROQ_MODEL,
         "messages": msgs + fallback_tail,
         "temperature": LLM_TEMPERATURE,
-        "max_tokens": _groq_max_output_tokens(),
+        "max_tokens": _groq_completion_cap(low),
     }
     r = await _groq_post_chat_completion(client, payload_final)
     r.raise_for_status()
@@ -608,13 +732,16 @@ async def api_markets_oil():
 async def chat(req: ChatRequest):
     """Send conversation to Groq or Ollama with crypto-focused system prompt."""
     snapshot = await fetch_live_price_snapshot()
-    news_snap = await fetch_news_snapshot_for_llm()
+    lu = _last_user_content_from_request(req)
+    omit_rss = USE_GROQ and _groq_short_format_turn(lu)
+    news_snap = "" if omit_rss else await fetch_news_snapshot_for_llm()
     messages = _build_messages(
         req,
         snapshot,
         news_snap,
         default_prices_grounding_note(),
         llm_news_grounding_note(),
+        omit_rss_block=omit_rss,
     )
 
     if USE_GROQ:
@@ -728,13 +855,16 @@ async def _stream_chat_ndjson(messages: list[dict]) -> AsyncIterator[bytes]:
 async def chat_stream(req: ChatRequest):
     """Same context as /api/chat but streams assistant text as NDJSON (one JSON object per line)."""
     snapshot = await fetch_live_price_snapshot()
-    news_snap = await fetch_news_snapshot_for_llm()
+    lu = _last_user_content_from_request(req)
+    omit_rss = USE_GROQ and _groq_short_format_turn(lu)
+    news_snap = "" if omit_rss else await fetch_news_snapshot_for_llm()
     messages = _build_messages(
         req,
         snapshot,
         news_snap,
         default_prices_grounding_note(),
         llm_news_grounding_note(),
+        omit_rss_block=omit_rss,
     )
 
     return StreamingResponse(

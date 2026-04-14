@@ -124,7 +124,9 @@ GROQ_TOOLS: list[dict[str, Any]] = [
             "name": "emit_trade_analysis",
             "description": (
                 "Record a structured trading / investment action view. "
-                "Call once when the user asks for buy/sell/hold, positioning, or trade plan. "
+                "Call once when the user asks for buy/sell/hold, positioning, trade plan, scorecard, or full analysis. "
+                "Do NOT call this tool when the user only constrains format (e.g. yes/no, one word, A or B only, "
+                "single sentence) without asking for structured trade output — answer in plain text only. "
                 "After calling, still write a clear natural-language answer for the user in their language. "
                 "For confidence and score_* use string digits only (e.g. \"62\"). "
                 "For key_risks use one string with risks separated by semicolons or newlines (not a JSON array)."

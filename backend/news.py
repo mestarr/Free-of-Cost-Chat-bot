@@ -40,7 +40,7 @@ FED_FEEDS: list[tuple[str, str, int]] = [
 
 TTL_SECONDS = float(os.getenv("NEWS_CACHE_SECONDS", "300"))
 FED_TTL_SECONDS = float(os.getenv("FED_NEWS_CACHE_SECONDS", "300"))
-MAX_HEADLINES_LLM = int(os.getenv("NEWS_MAX_HEADLINES_LLM", "18"))
+MAX_HEADLINES_LLM = int(os.getenv("NEWS_MAX_HEADLINES_LLM", "12"))
 
 _cache: dict[str, Any] = {"ts": 0.0, "items": [], "fetched_at": ""}
 _fed_cache: dict[str, Any] = {"ts": 0.0, "items": [], "fetched_at": ""}

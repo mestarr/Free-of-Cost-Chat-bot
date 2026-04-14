@@ -1,0 +1,11 @@
+target-version = "py312"
+line-length = 120
+
+[lint]
+select = ["E", "F", "I", "UP", "B"]
+# FastAPI handlers often map httpx errors to HTTPException without chaining.
+ignore = ["B904"]
+
+[lint.per-file-ignores]
+# Long system prompt and large handler blocks
+"backend/main.py" = ["E501"]

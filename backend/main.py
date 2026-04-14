@@ -4,33 +4,41 @@ Uses Groq (free cloud) if GROQ_API_KEY is set; otherwise Ollama (local).
 """
 import asyncio
 import json
+import logging
 import os
 import re
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .news import fetch_news_snapshot_for_llm, get_fed_news_api_payload, get_news_api_payload, llm_news_grounding_note
 from .llm_tools import GROQ_TOOLS, execute_tool, normalize_trade_card
+from .news import fetch_news_snapshot_for_llm, get_fed_news_api_payload, get_news_api_payload, llm_news_grounding_note
+from .observability import RequestLoggingMiddleware, counters_snapshot
 from .prices import (
     default_prices_grounding_note,
     fetch_live_price_snapshot,
     fetch_oil_prices_json,
     fetch_prices_json,
 )
+from .realtime import router as realtime_router
+from .redis_cache import close_client
+from .redis_cache import ping as redis_ping
 
 # Load project-root .env (same folder as backend/)
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(_root, ".env"))
 FRONTEND_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
+
+if not logging.root.handlers:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 # Smaller = faster; larger instruct models (e.g. llama-3.3-70b-versatile on Groq) trade speed for depth.
@@ -52,11 +60,31 @@ except ValueError:
 
 _llm_tools_raw = os.getenv("LLM_TOOLS", "1").strip().lower()
 LLM_TOOLS_ENABLED = _llm_tools_raw not in ("0", "false", "no", "off")
-_llm_tool_rounds_raw = os.getenv("LLM_MAX_TOOL_ROUNDS", "6").strip()
+_llm_tool_rounds_raw = os.getenv("LLM_MAX_TOOL_ROUNDS", "8").strip()
 try:
-    LLM_MAX_TOOL_ROUNDS = max(1, min(12, int(_llm_tool_rounds_raw)))
+    LLM_MAX_TOOL_ROUNDS = max(1, min(16, int(_llm_tool_rounds_raw)))
 except ValueError:
-    LLM_MAX_TOOL_ROUNDS = 6
+    LLM_MAX_TOOL_ROUNDS = 8
+
+# Groq free/on-demand tiers often cap a single request at ~6000 tokens (prompt + max_tokens + tool schemas).
+# Default completion cap stays well below LLM_MAX_TOKENS so prompt + requested output fits.
+_groq_cap_raw = os.getenv("GROQ_MAX_COMPLETION_TOKENS", "1536").strip()
+try:
+    GROQ_MAX_COMPLETION_TOKENS = max(256, min(8192, int(_groq_cap_raw)))
+except ValueError:
+    GROQ_MAX_COMPLETION_TOKENS = 1536
+_groq_req_raw = os.getenv("GROQ_PER_REQUEST_TOKEN_LIMIT", "6000").strip()
+try:
+    GROQ_PER_REQUEST_TOKEN_LIMIT = max(1024, min(200_000, int(_groq_req_raw)))
+except ValueError:
+    GROQ_PER_REQUEST_TOKEN_LIMIT = 6000
+_groq_tool_cap_raw = os.getenv("GROQ_MAX_TOOL_RESPONSE_CHARS", "12000").strip()
+try:
+    GROQ_MAX_TOOL_RESPONSE_CHARS = max(2000, min(100_000, int(_groq_tool_cap_raw)))
+except ValueError:
+    GROQ_MAX_TOOL_RESPONSE_CHARS = 12_000
+
+_GROQ_TOOLS_JSON_LEN: int | None = None
 
 SYSTEM_PROMPT = """You are Crypto ChatPal, a direct crypto market analyst. Be clear, specific, and practical. No fluff.
 
@@ -198,6 +226,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"Ollama not reachable. Set GROQ_API_KEY to use Groq instead, or start Ollama and run 'ollama pull {OLLAMA_MODEL}'.\n{e}")
     yield
+    await close_client()
 
 
 app = FastAPI(title="Crypto ChatPal", lifespan=lifespan)
@@ -208,6 +237,53 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestLoggingMiddleware)
+app.include_router(realtime_router)
+
+
+@app.get("/api/health")
+async def api_health():
+    """Liveness: process up; optional Redis ping when REDIS_URL is set."""
+    out: dict = {"ok": True}
+    if os.getenv("REDIS_URL", "").strip():
+        out["redis"] = await redis_ping()
+    else:
+        out["redis"] = None
+    return out
+
+
+@app.get("/api/metrics")
+async def api_metrics(response_format: str | None = Query(None, alias="format")):
+    """In-process counters and average HTTP latency (Prometheus text if format=prometheus)."""
+    c = counters_snapshot()
+    n = max(1, c.get("http_requests", 0))
+    avg = c.get("http_latency_ms_sum", 0) / n
+    if response_format == "prometheus":
+        lines = [
+            "# HELP ccp_http_requests_total HTTP requests counted by middleware",
+            "# TYPE ccp_http_requests_total counter",
+            f"ccp_http_requests_total {c.get('http_requests', 0)}",
+            "# HELP ccp_http_errors_total Responses with status >= 500 (and uncaught exceptions)",
+            "# TYPE ccp_http_errors_total counter",
+            f"ccp_http_errors_total {c.get('http_errors', 0)}",
+            "# HELP ccp_price_cache_hit_total Price cache hits (memory or Redis)",
+            "# TYPE ccp_price_cache_hit_total counter",
+            f"ccp_price_cache_hit_total {c.get('price_cache_hit', 0)}",
+            "# HELP ccp_price_cache_miss_total Price cache misses (upstream fetch)",
+            "# TYPE ccp_price_cache_miss_total counter",
+            f"ccp_price_cache_miss_total {c.get('price_cache_miss', 0)}",
+            "# HELP ccp_news_cache_hit_total News cache hits",
+            "# TYPE ccp_news_cache_hit_total counter",
+            f"ccp_news_cache_hit_total {c.get('news_cache_hit', 0)}",
+            "# HELP ccp_news_cache_miss_total News cache misses",
+            "# TYPE ccp_news_cache_miss_total counter",
+            f"ccp_news_cache_miss_total {c.get('news_cache_miss', 0)}",
+            "# HELP ccp_http_latency_avg_ms Average request latency (ms)",
+            "# TYPE ccp_http_latency_avg_ms gauge",
+            f"ccp_http_latency_avg_ms {round(avg, 4)}",
+        ]
+        return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
+    return {"counters": c, "http_latency_avg_ms": round(avg, 2)}
 
 
 def _build_messages(
@@ -218,7 +294,7 @@ def _build_messages(
     news_grounding: str = "",
 ) -> list[dict]:
     """System prompt + grounding manifest + optional live prices + headlines + conversation history."""
-    utc_now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    utc_now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     out: list[dict] = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {
@@ -249,6 +325,116 @@ def _build_messages(
     for m in req.messages:
         out.append({"role": m.role, "content": m.content})
     return out
+
+
+def _groq_tools_overhead_tokens() -> int:
+    global _GROQ_TOOLS_JSON_LEN
+    if _GROQ_TOOLS_JSON_LEN is None:
+        _GROQ_TOOLS_JSON_LEN = len(json.dumps(GROQ_TOOLS))
+    return max(350, _GROQ_TOOLS_JSON_LEN // 3)
+
+
+def _groq_max_output_tokens() -> int:
+    return max(64, min(LLM_MAX_TOKENS, GROQ_MAX_COMPLETION_TOKENS))
+
+
+def _groq_estimated_prompt_token_budget() -> int:
+    out = _groq_max_output_tokens()
+    tools = _groq_tools_overhead_tokens() if LLM_TOOLS_ENABLED else 0
+    return max(600, GROQ_PER_REQUEST_TOKEN_LIMIT - out - tools - 300)
+
+
+def _rough_token_estimate(text: str | None) -> int:
+    if not text:
+        return 0
+    return max(1, len(text) // 4)
+
+
+def _messages_estimated_prompt_tokens(messages: list[dict]) -> int:
+    n = 0
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, str):
+            n += _rough_token_estimate(c)
+        elif c is not None:
+            n += _rough_token_estimate(json.dumps(c))
+        tc = m.get("tool_calls")
+        if tc:
+            n += _rough_token_estimate(json.dumps(tc))
+    return n
+
+
+def _trim_messages_for_groq(messages: list[dict]) -> list[dict]:
+    """Shrink prompt to fit Groq per-request limits (drops old turns, then truncates text)."""
+    budget = _groq_estimated_prompt_token_budget()
+    out = [dict(m) for m in messages]
+
+    def est() -> int:
+        return _messages_estimated_prompt_tokens(out)
+
+    iterations = 0
+    while est() > budget and iterations < 250:
+        iterations += 1
+        i0 = 0
+        while i0 < len(out) and out[i0].get("role") == "system":
+            i0 += 1
+        if i0 < len(out) and len(out) - i0 > 1:
+            out.pop(i0)
+            continue
+        if i0 < len(out):
+            last = out[-1]
+            c = last.get("content")
+            if isinstance(c, str) and len(c) > 500:
+                over = est() - budget
+                chop = min(len(c) - 300, max(over * 4 + 200, 300))
+                if chop > 0:
+                    last["content"] = f"[…{chop} characters omitted…]\n" + c[chop:]
+                    continue
+        longest_j = -1
+        longest_len = 0
+        for j, m in enumerate(out):
+            if m.get("role") != "system":
+                continue
+            sc = m.get("content")
+            if isinstance(sc, str) and len(sc) > longest_len:
+                longest_len = len(sc)
+                longest_j = j
+        if longest_j >= 0 and longest_len > 800:
+            sc = out[longest_j]["content"]
+            over = est() - budget
+            newlen = max(400, longest_len - max(over * 4 + 100, 200))
+            if newlen < longest_len:
+                out[longest_j]["content"] = sc[:newlen] + "\n[… truncated for token limit …]"
+                continue
+        break
+    return out
+
+
+def _cap_tool_message_content(text: str) -> str:
+    if len(text) <= GROQ_MAX_TOOL_RESPONSE_CHARS:
+        return text
+    return text[: GROQ_MAX_TOOL_RESPONSE_CHARS - 80] + "\n...[tool output truncated for Groq size limit]"
+
+
+def _groq_api_error_detail(response: httpx.Response) -> str:
+    raw = response.text or ""
+    detail = raw
+    try:
+        err_j = response.json()
+        em = err_j.get("error")
+        if isinstance(em, dict):
+            detail = str(em.get("message") or raw)
+        elif isinstance(em, str):
+            detail = em
+    except (json.JSONDecodeError, ValueError, TypeError):
+        pass
+    dlow = detail.lower()
+    if "tpm" in dlow or "too large" in dlow or "reduce your message" in dlow:
+        detail += (
+            " | Tip: set GROQ_MAX_COMPLETION_TOKENS=1024 (or lower), shorten the thread or paste, "
+            "or reduce NEWS_MAX_HEADLINES_LLM in .env."
+        )
+    return detail
 
 
 def _ollama_options() -> dict:
@@ -290,11 +476,12 @@ async def _groq_complete_multistep(client: httpx.AsyncClient, messages: list[dic
     max_rounds = LLM_MAX_TOOL_ROUNDS if LLM_TOOLS_ENABLED else 1
 
     for _ in range(max_rounds):
+        msgs = _trim_messages_for_groq(msgs)
         payload: dict = {
             "model": GROQ_MODEL,
             "messages": msgs,
             "temperature": LLM_TEMPERATURE,
-            "max_tokens": LLM_MAX_TOKENS,
+            "max_tokens": _groq_max_output_tokens(),
         }
         if LLM_TOOLS_ENABLED:
             payload["tools"] = GROQ_TOOLS
@@ -333,18 +520,46 @@ async def _groq_complete_multistep(client: httpx.AsyncClient, messages: list[dic
                             trade_card = normalize_trade_card(parsed)
                     except json.JSONDecodeError:
                         pass
-                tool_text = await execute_tool(name, args)
+                tool_text = _cap_tool_message_content(await execute_tool(name, args))
                 msgs.append({"role": "tool", "tool_call_id": tid, "content": tool_text})
             continue
 
         content = (msg.get("content") or "").strip()
         return content, model_out, trade_card
 
-    return (
-        "I hit the tool-step limit; please ask a shorter question or try again.",
-        model_out,
-        trade_card,
-    )
+    # Model kept requesting tools until round cap — one final completion without tools so the user
+    # still gets an answer (broad questions like "crypto world situation" can burn many tool rounds).
+    msgs = _trim_messages_for_groq(msgs)
+    fallback_tail = [
+        {
+            "role": "user",
+            "content": (
+                "You used many tool rounds. Now write the full answer for the user in natural language only. "
+                "Use the injected context and any tool JSON already in this thread; do not call tools again."
+            ),
+        }
+    ]
+    payload_final: dict = {
+        "model": GROQ_MODEL,
+        "messages": msgs + fallback_tail,
+        "temperature": LLM_TEMPERATURE,
+        "max_tokens": _groq_max_output_tokens(),
+    }
+    r = await _groq_post_chat_completion(client, payload_final)
+    r.raise_for_status()
+    data = r.json()
+    choice0 = (data.get("choices") or [{}])[0]
+    model_out = data.get("model") or GROQ_MODEL
+    msg = choice0.get("message") or {}
+    content = (msg.get("content") or "").strip()
+    if not content:
+        return (
+            "I pulled live data but ran out of model steps before a final reply. "
+            "Try again, or ask one focused question (e.g. a single coin or topic).",
+            model_out,
+            trade_card,
+        )
+    return content, model_out, trade_card
 
 
 @app.get("/api/prices")
@@ -408,9 +623,10 @@ async def chat(req: ChatRequest):
                 content, model_used, trade = await _groq_complete_multistep(client, messages)
                 return ChatResponse(message=content, model=model_used, trade=trade)
             except httpx.HTTPStatusError as e:
-                detail = e.response.text
                 if e.response.status_code == 401:
                     detail = "Invalid GROQ_API_KEY. Get a free key at https://console.groq.com"
+                else:
+                    detail = _groq_api_error_detail(e.response)
                 raise HTTPException(status_code=e.response.status_code, detail=detail)
     else:
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -450,14 +666,10 @@ async def _stream_chat_ndjson(messages: list[dict]) -> AsyncIterator[bytes]:
                 try:
                     content, model_used, trade = await _groq_complete_multistep(client, messages)
                 except httpx.HTTPStatusError as e:
-                    raw = e.response.text
-                    try:
-                        err_j = json.loads(raw)
-                        detail = err_j.get("error", {}).get("message") or raw
-                    except json.JSONDecodeError:
-                        detail = raw or str(e)
                     if e.response.status_code == 401:
                         detail = "Invalid GROQ_API_KEY. Get a free key at https://console.groq.com"
+                    else:
+                        detail = _groq_api_error_detail(e.response)
                     yield _ndjson_line({"error": detail})
                     return
                 except Exception as e:

@@ -28,6 +28,7 @@ from .prices import (
     fetch_oil_prices_json,
     fetch_prices_json,
 )
+from .realtime import router as realtime_router
 from .redis_cache import close_client
 from .redis_cache import ping as redis_ping
 
@@ -59,11 +60,11 @@ except ValueError:
 
 _llm_tools_raw = os.getenv("LLM_TOOLS", "1").strip().lower()
 LLM_TOOLS_ENABLED = _llm_tools_raw not in ("0", "false", "no", "off")
-_llm_tool_rounds_raw = os.getenv("LLM_MAX_TOOL_ROUNDS", "6").strip()
+_llm_tool_rounds_raw = os.getenv("LLM_MAX_TOOL_ROUNDS", "8").strip()
 try:
-    LLM_MAX_TOOL_ROUNDS = max(1, min(12, int(_llm_tool_rounds_raw)))
+    LLM_MAX_TOOL_ROUNDS = max(1, min(16, int(_llm_tool_rounds_raw)))
 except ValueError:
-    LLM_MAX_TOOL_ROUNDS = 6
+    LLM_MAX_TOOL_ROUNDS = 8
 
 # Groq free/on-demand tiers often cap a single request at ~6000 tokens (prompt + max_tokens + tool schemas).
 # Default completion cap stays well below LLM_MAX_TOKENS so prompt + requested output fits.
@@ -237,6 +238,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(RequestLoggingMiddleware)
+app.include_router(realtime_router)
 
 
 @app.get("/api/health")
@@ -525,11 +527,39 @@ async def _groq_complete_multistep(client: httpx.AsyncClient, messages: list[dic
         content = (msg.get("content") or "").strip()
         return content, model_out, trade_card
 
-    return (
-        "I hit the tool-step limit; please ask a shorter question or try again.",
-        model_out,
-        trade_card,
-    )
+    # Model kept requesting tools until round cap — one final completion without tools so the user
+    # still gets an answer (broad questions like "crypto world situation" can burn many tool rounds).
+    msgs = _trim_messages_for_groq(msgs)
+    fallback_tail = [
+        {
+            "role": "user",
+            "content": (
+                "You used many tool rounds. Now write the full answer for the user in natural language only. "
+                "Use the injected context and any tool JSON already in this thread; do not call tools again."
+            ),
+        }
+    ]
+    payload_final: dict = {
+        "model": GROQ_MODEL,
+        "messages": msgs + fallback_tail,
+        "temperature": LLM_TEMPERATURE,
+        "max_tokens": _groq_max_output_tokens(),
+    }
+    r = await _groq_post_chat_completion(client, payload_final)
+    r.raise_for_status()
+    data = r.json()
+    choice0 = (data.get("choices") or [{}])[0]
+    model_out = data.get("model") or GROQ_MODEL
+    msg = choice0.get("message") or {}
+    content = (msg.get("content") or "").strip()
+    if not content:
+        return (
+            "I pulled live data but ran out of model steps before a final reply. "
+            "Try again, or ask one focused question (e.g. a single coin or topic).",
+            model_out,
+            trade_card,
+        )
+    return content, model_out, trade_card
 
 
 @app.get("/api/prices")

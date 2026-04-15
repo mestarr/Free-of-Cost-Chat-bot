@@ -33,6 +33,19 @@
 
   const PRICE_STORAGE_KEY = 'cryptochatpal_price_rows';
   const THEME_KEY = 'cryptochatpal_theme';
+  /** Optional SaaS API key (set via localStorage when server uses CCP_AUTH_MODE=required). */
+  const CCP_API_KEY_STORAGE = 'ccp_api_key';
+
+  function ccpApiAuthHeaders() {
+    const h = {};
+    try {
+      const k = localStorage.getItem(CCP_API_KEY_STORAGE);
+      if (k && String(k).trim()) h['X-CCP-API-Key'] = String(k).trim();
+    } catch (e) {
+      /* ignore */
+    }
+    return h;
+  }
 
   function getTheme() {
     return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
@@ -928,7 +941,7 @@
   async function loadPrices() {
     try {
       const url = '/api/prices?ids=' + encodeURIComponent(buildCombinedIdsQuery());
-      const res = await fetch(url);
+      const res = await fetch(url, { headers: ccpApiAuthHeaders() });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         const d = data.detail;
@@ -1198,7 +1211,7 @@
   async function loadOil() {
     if (!oilList) return;
     try {
-      const res = await fetch('/api/markets/oil');
+      const res = await fetch('/api/markets/oil', { headers: ccpApiAuthHeaders() });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         const d = data.detail;
@@ -1245,7 +1258,7 @@
   async function loadFedNews() {
     if (!fedList) return;
     try {
-      const res = await fetch('/api/news/fed');
+      const res = await fetch('/api/news/fed', { headers: ccpApiAuthHeaders() });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         const d = data.detail;
@@ -1364,7 +1377,7 @@
   async function loadNews() {
     if (!newsList) return;
     try {
-      const res = await fetch('/api/news');
+      const res = await fetch('/api/news', { headers: ccpApiAuthHeaders() });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         const d = data.detail;
@@ -1403,7 +1416,16 @@
 
   function liveWsUrl() {
     const p = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return p + '//' + location.host + '/api/ws/live';
+    let base = p + '//' + location.host + '/api/ws/live';
+    try {
+      const k = localStorage.getItem(CCP_API_KEY_STORAGE);
+      if (k && String(k).trim()) {
+        base += '?api_key=' + encodeURIComponent(String(k).trim());
+      }
+    } catch (e) {
+      /* ignore */
+    }
+    return base;
   }
 
   function sendLiveSubscribe() {
@@ -1545,6 +1567,7 @@
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/x-ndjson',
+          ...ccpApiAuthHeaders(),
         },
         body: JSON.stringify({ messages: messagesForApi }),
       });

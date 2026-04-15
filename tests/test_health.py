@@ -11,6 +11,8 @@ def test_health_ok():
     data = r.json()
     assert data["ok"] is True
     assert "redis" in data
+    assert data.get("auth_mode") == "off"
+    assert "redis_cache" in data
 
 
 def test_metrics_json():

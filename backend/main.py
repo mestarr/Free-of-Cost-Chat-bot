@@ -19,6 +19,9 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .accounts import init_db as init_accounts_db
+from .admin_routes import me_router
+from .admin_routes import router as admin_router
 from .llm_tools import GROQ_TOOLS, execute_tool, normalize_trade_card
 from .news import fetch_news_snapshot_for_llm, get_fed_news_api_payload, get_news_api_payload, llm_news_grounding_note
 from .observability import RequestLoggingMiddleware, counters_snapshot
@@ -31,6 +34,7 @@ from .prices import (
 from .realtime import router as realtime_router
 from .redis_cache import close_client
 from .redis_cache import ping as redis_ping
+from .saas_middleware import TenantMiddleware
 
 # Load project-root .env (same folder as backend/)
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -43,6 +47,9 @@ if not logging.root.handlers:
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 # Smaller = faster; larger instruct models (e.g. llama-3.3-70b-versatile on Groq) trade speed for depth.
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+# Automatic fallback when primary model exhausts its daily token quota (TPD).
+# Must be a model with its own quota bucket; 8b has the most generous free-tier TPD.
+_GROQ_FALLBACK_MODEL = "llama-3.1-8b-instant"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 USE_GROQ = bool(GROQ_API_KEY)
@@ -68,11 +75,11 @@ except ValueError:
 
 # Groq free/on-demand tiers often cap a single request at ~6000 tokens (prompt + max_tokens + tool schemas).
 # Default completion cap stays well below LLM_MAX_TOKENS so prompt + requested output fits.
-_groq_cap_raw = os.getenv("GROQ_MAX_COMPLETION_TOKENS", "1024").strip()
+_groq_cap_raw = os.getenv("GROQ_MAX_COMPLETION_TOKENS", "2048").strip()
 try:
     GROQ_MAX_COMPLETION_TOKENS = max(256, min(8192, int(_groq_cap_raw)))
 except ValueError:
-    GROQ_MAX_COMPLETION_TOKENS = 1024
+    GROQ_MAX_COMPLETION_TOKENS = 2048
 _groq_req_raw = os.getenv("GROQ_PER_REQUEST_TOKEN_LIMIT", "6000").strip()
 try:
     GROQ_PER_REQUEST_TOKEN_LIMIT = max(1024, min(200_000, int(_groq_req_raw)))
@@ -99,10 +106,13 @@ _GROQ_TOOLS_JSON_LEN: int | None = None
 SYSTEM_PROMPT = """You are Crypto ChatPal, a direct crypto market analyst. Be clear, specific, and practical. No fluff.
 
 Core behavior:
-- Format-first (overrides default trade verbosity): If the user limits how they want the answer — e.g. "yes or no", "one word only", "just A or B", "single sentence", "no essay" — your visible reply must obey that first. Use plain text only; do not call emit_trade_analysis; do not use the scorecard / View-Confidence-Score template for that turn unless they also explicitly ask for trade analysis, scores, or a plan. For strict "yes or no", start with exactly "Yes" or "No"; you may add at most one short parenthetical (≤8 words) only if needed for honesty, e.g. "No (wait — weak setup)".
+- Format-first (overrides default trade verbosity): ONLY applies when the user EXPLICITLY includes a format constraint in that message — e.g. "answer yes or no", "one word only", "just A or B", "single sentence only", "no essay". It does NOT apply just because the question CAN be answered with yes/no. "Should I buy BTC?", "Do I need to buy now?", "Is it a good time to sell?" are TRADE ACTION questions — they ALWAYS get the full decision framework (scorecard + plan), even though they could technically be answered with yes or no.
+- When format-first does apply: use plain text only; do not call emit_trade_analysis; do not use the scorecard template for that turn. For strict "yes or no", start with exactly "Yes" or "No"; you may add at most one short parenthetical (≤8 words) only if needed for honesty, e.g. "No (wait — weak setup)".
+- Format-first resets on follow-up: if the very next user message is a clarification or elaboration request (e.g. "what do you mean?", "explain that", "why?", "elaborate", "tell me more"), treat it as a normal open-ended question — give a full explanation. The format constraint from the previous turn does NOT carry over.
 - Match response shape to intent:
   - Education, definitions, how things work, history, or general discussion: answer directly in plain language. Do not use the full trade scorecard / entry-exit plan unless the user clearly asks for trading or investment action.
-  - Trading or investment action (buy/sell/hold, entries, targets, sizing, "what should I do", portfolio moves): use the full decision framework and structured format below — except when a format-first rule above applies.
+  - Trading or investment action (buy/sell/hold, entries, targets, sizing, "what should I do", "do I need to buy", "should I buy/sell", portfolio moves): use the full decision framework and structured format below — except when an explicit format-first rule applies.
+  - Timing and follow-up questions ("how long should I wait?", "when to buy?", "how much longer?"): give a specific, reasoned answer using available price/news context. State key conditions that would change the timing (e.g. "wait for X level", "watch for Y event"). Never say "no timeframe in context" and stop — use what IS available (live price, trend, news) to give a practical estimate.
 - You ARE allowed to give a directional trading opinion when asked (buy / sell / hold), but present it as probabilistic analysis, never certainty.
 - Follow Grounding rules (below) for every factual claim about live markets, current prices, or news in this session.
 - If injected data is missing or stale, say so explicitly and lower confidence; never fill gaps with invented numbers or headlines.
@@ -192,6 +202,7 @@ Response discipline:
 - Include one "What changes my view" bullet (skip if the user forbade extra content, e.g. strict yes/no only).
 - Keep answers short, structured, and numeric where possible.
 - If the user demanded a minimal format, do not open with grounding-manifest recap or a trade card; deliver the constrained answer first.
+- A follow-up message that asks for clarification or explanation ("what do you mean", "why", "explain", "elaborate") is never a format constraint — always give a full, helpful answer for that message.
 
 Smarter reasoning (internal; keep the reply concise):
 1) Classify: trade action vs education vs news vs portfolio vs format-only (yes/no, one word) — lead with what they asked; honor format-only before any tool or scorecard.
@@ -225,6 +236,7 @@ class ChatResponse(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    init_accounts_db()
     if USE_GROQ:
         print("Using Groq (free cloud). No Ollama needed.")
         if LLM_TOOLS_ENABLED:
@@ -250,13 +262,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(TenantMiddleware)
+app.include_router(admin_router)
+app.include_router(me_router)
 app.include_router(realtime_router)
 
 
 @app.get("/api/health")
 async def api_health():
     """Liveness: process up; optional Redis ping when REDIS_URL is set."""
-    out: dict = {"ok": True}
+    out: dict = {
+        "ok": True,
+        "auth_mode": os.getenv("CCP_AUTH_MODE", "off").strip().lower(),
+        "redis_cache": bool(os.getenv("REDIS_URL", "").strip()),
+    }
     if os.getenv("REDIS_URL", "").strip():
         out["redis"] = await redis_ping()
     else:
@@ -599,10 +618,11 @@ async def _groq_complete_multistep(client: httpx.AsyncClient, messages: list[dic
     model_out = GROQ_MODEL
     max_rounds = 1 if (low or not LLM_TOOLS_ENABLED) else LLM_MAX_TOOL_ROUNDS
 
+    active_model = GROQ_MODEL
     for _ in range(max_rounds):
         msgs = _trim_messages_for_groq(msgs)
         payload: dict = {
-            "model": GROQ_MODEL,
+            "model": active_model,
             "messages": msgs,
             "temperature": LLM_TEMPERATURE,
             "max_tokens": _groq_completion_cap(low),
@@ -612,11 +632,39 @@ async def _groq_complete_multistep(client: httpx.AsyncClient, messages: list[dic
             payload["tool_choice"] = "auto"
 
         r = await _groq_post_chat_completion(client, payload)
+
+        # TPD daily cap: if primary model quota exhausted, fall back to 8b automatically
+        if r.status_code == 429 and _groq_is_daily_quota_429(r) and active_model != _GROQ_FALLBACK_MODEL:
+            active_model = _GROQ_FALLBACK_MODEL
+            fallback_payload: dict = {
+                "model": active_model,
+                "messages": msgs,
+                "temperature": LLM_TEMPERATURE,
+                "max_tokens": min(_groq_completion_cap(low), 1024),
+            }
+            r = await _groq_post_chat_completion(client, fallback_payload)
+
         r.raise_for_status()
         data = r.json()
         choice0 = (data.get("choices") or [{}])[0]
-        model_out = data.get("model") or GROQ_MODEL
+        model_out = data.get("model") or active_model
         msg = choice0.get("message") or {}
+        finish_reason = choice0.get("finish_reason") or ""
+
+        # failed_generation: model produced a malformed tool call — strip tools and get a plain answer
+        if finish_reason == "failed_generation":
+            plain_payload2: dict = {
+                "model": active_model,
+                "messages": msgs,
+                "temperature": LLM_TEMPERATURE,
+                "max_tokens": min(_groq_completion_cap(low), 1024),
+            }
+            r2 = await _groq_post_chat_completion(client, plain_payload2)
+            r2.raise_for_status()
+            data2 = r2.json()
+            c2 = ((data2.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+            return (c2.strip() or "I could not generate a response — try rephrasing your question."), model_out, trade_card
+
         tcalls = msg.get("tool_calls")
 
         if tcalls:
@@ -664,16 +712,21 @@ async def _groq_complete_multistep(client: httpx.AsyncClient, messages: list[dic
         }
     ]
     payload_final: dict = {
-        "model": GROQ_MODEL,
+        "model": active_model,
         "messages": msgs + fallback_tail,
         "temperature": LLM_TEMPERATURE,
         "max_tokens": _groq_completion_cap(low),
     }
     r = await _groq_post_chat_completion(client, payload_final)
+    if r.status_code == 429 and _groq_is_daily_quota_429(r) and active_model != _GROQ_FALLBACK_MODEL:
+        active_model = _GROQ_FALLBACK_MODEL
+        payload_final["model"] = active_model
+        payload_final["max_tokens"] = min(payload_final["max_tokens"], 1024)
+        r = await _groq_post_chat_completion(client, payload_final)
     r.raise_for_status()
     data = r.json()
     choice0 = (data.get("choices") or [{}])[0]
-    model_out = data.get("model") or GROQ_MODEL
+    model_out = data.get("model") or active_model
     msg = choice0.get("message") or {}
     content = (msg.get("content") or "").strip()
     if not content:

@@ -14,11 +14,16 @@ A **free**, crypto-focused AI chatbot with a web UI, **live USD spot prices** (C
 | `backend/main.py` | FastAPI app: `/api/chat`, `/api/chat/stream`, `/api/prices`, `/api/news`, serves static frontend |
 | `backend/prices.py` | CoinGecko live prices (cached), shared with chat context |
 | `backend/news.py` | RSS headline aggregation (cached), shared with chat context |
+| `backend/accounts.py` | SQLite API keys (hashed) and per-day usage counters |
+| `backend/saas_middleware.py` | Optional `/api/*` auth, rate limits, usage on successful responses |
+| `backend/admin_routes.py` | `POST /api/admin/keys`, `GET /api/me/usage` |
+| `backend/redis_cache.py` | Redis read-through cache helpers and shared rate-limit windows |
 | `frontend/index.html` | Page structure only |
 | `frontend/css/style.css` | Layout and visual design |
 | `frontend/js/app.js` | Chat + prices + news panel behavior |
 | `requirements.txt` | Python dependencies |
-| `.env` | Optional: `GROQ_API_KEY` (copy from `.env.example`) |
+| `docker-compose.yml` | Optional Redis (`--profile cache`) + named volume for `.data` (accounts DB) |
+| `.env` / `.env.example` | Groq/Ollama, optional `REDIS_URL`, optional `CCP_*` tenant settings |
 
 ## Quick start (Groq – no Ollama)
 
@@ -52,9 +57,41 @@ A **free**, crypto-focused AI chatbot with a web UI, **live USD spot prices** (C
 
 ## Configuration
 
+Use **`.env.example`** as the checklist for every variable (each is commented there).
+
+### LLM and context
+
 - **Groq**: `GROQ_API_KEY` in `.env`; optional `GROQ_MODEL` (default `llama-3.1-8b-instant`).
 - **Ollama**: optional `OLLAMA_MODEL` (default `llama3.2`), `OLLAMA_URL` if Ollama runs elsewhere.
 - **News RSS**: optional `NEWS_CACHE_SECONDS` (default `300`), `NEWS_MAX_HEADLINES_LLM` (default `18`), `NEWS_USER_AGENT`.
+
+### Shared Redis (optional)
+
+If **`REDIS_URL`** is set (for example `redis://redis:6379/0` when using Docker Compose), the server uses Redis for **price and news read-through cache** and for **per-key / per-IP rate limits**, so behavior is consistent across **multiple workers**. Without Redis, those features fall back to **in-process memory** (fine for one process; not shared across processes).
+
+Compose: `docker compose --profile cache up -d`, then point `REDIS_URL` at the `redis` service as in `.env.example`.
+
+### API keys, usage, and auth (optional)
+
+By default the app stays **open** (no tenant API key). For SaaS-style controls:
+
+| Variable | Role |
+|----------|------|
+| `CCP_AUTH_MODE` | `off` (default), `optional` (validate key when present), or `required` (HTTP `/api/*` and live WebSocket need a valid key). |
+| `CCP_ADMIN_SECRET` | Protects **`POST /api/admin/keys`** via header **`X-CCP-Admin-Secret`**. Use a long random value in production. |
+| `CCP_ACCOUNTS_DB` | Optional SQLite path; default **`.data/ccp_accounts.sqlite`** (gitignored). |
+| `CCP_KEY_PEPPER` | Pepper for hashing stored keys; **change the default in production**. |
+| `CCP_RATE_LIMIT_PER_KEY`, `CCP_RATE_LIMIT_ANON_IP`, `CCP_RATE_LIMIT_WINDOW_SEC` | Fixed-window limits; anonymous IP bucket applies without a key or when auth is off/optional. |
+
+**Bootstrap a key**: `POST /api/admin/keys` with the admin header; optional JSON body `{"label":"my laptop"}`. The JSON response includes **`api_key` once** (prefix `ccp_sk_…`); the server only stores a hash.
+
+**Calling the API**: header **`X-CCP-API-Key`** or **`Authorization: Bearer <your ccp_sk_… key>`**. **`GET /api/me/usage?days=14`** returns daily request totals for that key.
+
+**Web UI with `required` auth**: set browser **`localStorage`** key **`ccp_api_key`** to your secret so requests send **`X-CCP-API-Key`** and the live socket uses **`?api_key=...`** (custom WebSocket headers are awkward in browsers).
+
+**Usage accounting**: successful `/api/*` responses increment per-key daily counters when a key is attached. Paths such as **`/api/health`**, **`/api/metrics`**, **`/api/admin`**, **`/docs`**, **`/redoc`**, and **`/openapi.json`** are excluded from that behavior.
+
+**Docker**: `docker-compose.yml` mounts a named volume at **`/app/.data`** so the default accounts database survives container recreation.
 
 ## Headlines (RSS)
 
@@ -119,3 +156,13 @@ Sentiment labels in the UI are **rough keyword heuristics**, not financial analy
 - Change **behavior** (chat, price refresh, news refresh) in `frontend/js/app.js`.
 
 After edits, refresh the browser; with `--reload`, the server restarts when Python files change.
+
+## Tests and lint
+
+From the project root (with your venv activated):
+
+```powershell
+python -m pip install -r requirements.txt
+ruff check backend tests
+pytest -q
+```

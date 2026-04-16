@@ -8,6 +8,9 @@ services:
     environment:
       # Set REDIS_URL=redis://redis:6379/0 when using the cache profile.
       REDIS_URL: ${REDIS_URL:-}
+    # Persist API-key / usage SQLite (default path .data/ccp_accounts.sqlite → /app/.data in the image).
+    volumes:
+      - ccp_accounts_data:/app/.data
 
   redis:
     image: redis:7-alpine
@@ -19,3 +22,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
+volumes:
+  ccp_accounts_data:

@@ -3,19 +3,37 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from .accounts import verify_api_key
 from .news import get_fed_news_api_payload, get_news_api_payload
 from .prices import fetch_oil_prices_json, fetch_prices_json
 
 router = APIRouter()
 
 
+def _ws_auth_ok(websocket: WebSocket) -> bool:
+    mode = os.getenv("CCP_AUTH_MODE", "off").strip().lower()
+    if mode != "required":
+        return True
+    token = (
+        websocket.query_params.get("api_key")
+        or websocket.headers.get("x-ccp-api-key")
+        or websocket.headers.get("X-CCP-API-Key")
+        or ""
+    ).strip()
+    return bool(token and verify_api_key(token))
+
+
 @router.websocket("/api/ws/live")
 async def websocket_live(websocket: WebSocket):
     """Push prices ~1s, news ~90s, macro ~5m; accepts {type: subscribe, ids: csv}."""
+    if not _ws_auth_ok(websocket):
+        await websocket.close(code=4401, reason="Unauthorized")
+        return
     await websocket.accept()
     ids_csv = ""
     last_news = 0.0

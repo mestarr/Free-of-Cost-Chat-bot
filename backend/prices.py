@@ -38,11 +38,13 @@ LABELS = {
 
 TTL_SECONDS = float(os.getenv("PRICE_CACHE_SECONDS", "10"))
 OIL_TTL_SECONDS = float(os.getenv("OIL_CACHE_SECONDS", "300"))
+# After a 429 we wait this many seconds before hitting CoinGecko again (serve stale in between).
+_RATE_LIMIT_BACKOFF = max(TTL_SECONDS * 6, 60.0)
 MAX_IDS_PER_REQUEST = 40
 MAX_CACHE_BUCKETS = 24
 _PRICE_REDIS_PREFIX = "ccp:price:v1:"
 
-# bucket_key (sorted ids joined) -> {"ts": float, "data": dict | None}
+# bucket_key -> {"ts": float, "data": dict | None, "retry_after": float}
 _caches: dict[str, dict] = {}
 _oil_cache: dict[str, object] = {"ts": 0.0, "data": {}}
 
@@ -109,7 +111,9 @@ def _snapshot_from_data(data: dict) -> str:
     )
 
 
-async def _fetch_upstream(ids_param: str) -> dict | None:
+async def _fetch_upstream(ids_param: str) -> tuple[dict | None, float]:
+    """Returns (data, retry_after).  data=None means rate-limited; retry_after is how
+    many seconds to wait before trying again (0 = no hint)."""
     url = "https://api.coingecko.com/api/v3/simple/price"
     params = {
         "ids": ids_param,
@@ -120,9 +124,13 @@ async def _fetch_upstream(ids_param: str) -> dict | None:
     async with httpx.AsyncClient(timeout=12.0) as client:
         r = await client.get(url, params=params, headers=headers)
         if r.status_code == 429:
-            return None
+            try:
+                ra = float(r.headers.get("retry-after", 0))
+            except (ValueError, TypeError):
+                ra = 0.0
+            return None, ra
         r.raise_for_status()
-        return r.json()
+        return r.json(), 0.0
 
 
 async def get_price_data(ids_csv: str | None = None) -> dict:
@@ -142,33 +150,48 @@ async def get_price_data(ids_csv: str | None = None) -> dict:
     bucket = _cache_bucket_key(ids_list)
     now = time.time()
     ent = _caches.get(bucket)
+
+    # Fresh in-process hit
     if ent and ent.get("data") is not None and (now - ent["ts"]) < TTL_SECONDS:
         observability.inc_counter("price_cache_hit")
         return ent["data"]
+
+    # Still within backoff window after a 429 — serve stale, don't call upstream
+    if ent and ent.get("retry_after", 0.0) > now:
+        observability.inc_counter("price_cache_hit")
+        return ent.get("data") or {}
 
     if REDIS_URL:
         rkey = _PRICE_REDIS_PREFIX + bucket
         rd = await cache_get_json(rkey)
         if rd and isinstance(rd, dict) and rd:
             _evict_oldest_cache()
-            _caches[bucket] = {"ts": now, "data": rd}
+            _caches[bucket] = {"ts": now, "data": rd, "retry_after": 0.0}
             observability.inc_counter("price_cache_hit")
             return rd
 
     observability.inc_counter("price_cache_miss")
     try:
-        data = await _fetch_upstream(fetch_part)
+        data, hint = await _fetch_upstream(fetch_part)
         if data is None:
+            # 429 — back off; update ts so TTL also resets to avoid immediate re-check
+            backoff = now + (hint if hint > 0 else _RATE_LIMIT_BACKOFF)
+            if ent:
+                ent["ts"] = now
+                ent["retry_after"] = backoff
+            else:
+                _caches[bucket] = {"ts": now, "data": None, "retry_after": backoff}
             if ent and ent.get("data") is not None:
                 return ent["data"]
             return {}
         _evict_oldest_cache()
-        _caches[bucket] = {"ts": now, "data": data}
+        _caches[bucket] = {"ts": now, "data": data, "retry_after": 0.0}
         if REDIS_URL:
             await cache_set_json(_PRICE_REDIS_PREFIX + bucket, data, int(max(1, TTL_SECONDS)))
         return data
     except Exception:
         if ent and ent.get("data") is not None:
+            ent["ts"] = now  # also back off on generic errors
             return ent["data"]
         return {}
 

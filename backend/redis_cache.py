@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Any
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
@@ -68,3 +69,23 @@ async def ping() -> bool:
         return bool(await r.ping())
     except Exception:
         return False
+
+
+async def rate_limit_fixed_window(redis_key: str, limit: int, window_seconds: int) -> bool:
+    """
+    Fixed-window counter in Redis. Returns True if request is allowed, False if limit exceeded.
+    No-op (allows) when Redis is unavailable.
+    """
+    r = await get_client()
+    if not r or limit <= 0:
+        return True
+    try:
+        win = max(5, int(window_seconds))
+        bucket = int(time.time() // win)
+        k = f"ccp:rl:{redis_key}:{bucket}"
+        n = await r.incr(k)
+        if n == 1:
+            await r.expire(k, win + 2)
+        return n <= limit
+    except Exception:
+        return True

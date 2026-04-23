@@ -30,6 +30,7 @@ from .prices import (
     fetch_live_price_snapshot,
     fetch_oil_prices_json,
     fetch_prices_json,
+    fetch_sparklines_json,
 )
 from .realtime import router as realtime_router
 from .redis_cache import close_client
@@ -752,6 +753,21 @@ async def api_prices(
         return await fetch_prices_json(ids_csv=ids)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Price feed unavailable: {e!s}") from e
+
+
+@app.get("/api/prices/sparklines")
+async def api_prices_sparklines(
+    ids: str | None = Query(
+        None,
+        max_length=2048,
+        description="Comma-separated CoinGecko coin ids. Omit for default watchlist.",
+    ),
+):
+    """24h price series per coin (hourly, downsampled). Cached separately from spot."""
+    try:
+        return await fetch_sparklines_json(ids_csv=ids)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Sparkline feed unavailable: {e!s}") from e
 
 
 @app.get("/api/news")

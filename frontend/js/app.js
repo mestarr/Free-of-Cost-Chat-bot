@@ -893,12 +893,51 @@
     sendLiveSubscribe();
   }
 
+  /** Latest per-coin 24h sparkline series, keyed by CoinGecko id. */
+  let lastSparklines = {};
+
+  function buildSparklineSvg(points, ch24h) {
+    if (!Array.isArray(points) || points.length < 2) return '';
+    const w = 72;
+    const h = 22;
+    const pad = 1;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const p of points) {
+      if (typeof p !== 'number' || Number.isNaN(p)) continue;
+      if (p < lo) lo = p;
+      if (p > hi) hi = p;
+    }
+    if (!isFinite(lo) || !isFinite(hi)) return '';
+    const span = hi - lo || 1;
+    const stepX = (w - pad * 2) / (points.length - 1);
+    const coords = points.map((p, i) => {
+      const x = pad + i * stepX;
+      const y = pad + (h - pad * 2) * (1 - (p - lo) / span);
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    });
+    const path = 'M' + coords.join(' L');
+    let cls = 'spark-neutral';
+    if (ch24h != null && Number.isFinite(ch24h)) {
+      if (ch24h > 0) cls = 'spark-up';
+      else if (ch24h < 0) cls = 'spark-down';
+    } else {
+      const last = points[points.length - 1];
+      const first = points[0];
+      if (typeof last === 'number' && typeof first === 'number' && !Number.isNaN(last) && !Number.isNaN(first)) {
+        cls = last >= first ? 'spark-up' : 'spark-down';
+      }
+    }
+    return `<svg class="spark ${cls}" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true"><path d="${path}" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  }
+
   function renderPrices(data) {
     pricesError.classList.add('hidden');
     lastPricesPayload = data && typeof data === 'object' ? data : {};
     const orderKey = priceRows.map((r) => r.id).join('|');
+    const sparkKey = Object.keys(lastSparklines).sort().join(',');
     const composite =
-      JSON.stringify(lastPricesPayload) + '|' + orderKey + '|' + portfolioSignature();
+      JSON.stringify(lastPricesPayload) + '|' + orderKey + '|' + sparkKey + '|' + portfolioSignature();
     if (composite === lastRenderKey) {
       pricesUpdated.textContent = 'Live · ' + new Date().toLocaleTimeString();
       renderPortfolioView(lastPricesPayload);
@@ -915,6 +954,7 @@
       if (!row || row.usd == null) {
         div.innerHTML = `
           <span class="sym">${escapeHtml(sym)}</span>
+          <span class="spark-cell"></span>
           <span class="usd">—</span>
           <span class="chg neutral">No data</span>`;
         pricesList.appendChild(div);
@@ -927,8 +967,12 @@
         chClass = ch > 0 ? 'up' : ch < 0 ? 'down' : 'neutral';
         chText = `24h ${ch >= 0 ? '+' : ''}${ch.toFixed(2)}%`;
       }
+      const series = lastSparklines[id];
+      const sparkHtml =
+        series && series.length >= 2 ? buildSparklineSvg(series, ch) : '';
       div.innerHTML = `
           <span class="sym">${escapeHtml(sym)}</span>
+          <span class="spark-cell">${sparkHtml}</span>
           <span class="usd">${formatUsd(row.usd)}</span>
           <span class="chg ${chClass}">${chText}</span>`;
       pricesList.appendChild(div);
@@ -936,6 +980,24 @@
     pricesUpdated.textContent = 'Live · ' + new Date().toLocaleTimeString();
     renderPortfolioView(lastPricesPayload);
     updateSessionDeskUI();
+  }
+
+  async function loadSparklines() {
+    try {
+      const url = '/api/prices/sparklines?ids=' + encodeURIComponent(buildCombinedIdsQuery());
+      const res = await fetch(url, { headers: ccpApiAuthHeaders() });
+      if (!res.ok) return;
+      const data = await res.json().catch(() => null);
+      if (data && typeof data === 'object') {
+        lastSparklines = data;
+        lastRenderKey = '';
+        if (lastPricesPayload && Object.keys(lastPricesPayload).length) {
+          renderPrices(lastPricesPayload);
+        }
+      }
+    } catch (e) {
+      /* silent — sparklines are decoration */
+    }
   }
 
   async function loadPrices() {
@@ -991,6 +1053,7 @@
     renderEditorRows();
     renderPrices(lastPricesPayload);
     loadPrices();
+    loadSparklines();
     sendLiveSubscribe();
   }
 
@@ -1164,6 +1227,7 @@
 
   renderPortfolioView({});
   loadPrices();
+  loadSparklines();
   setInterval(function ccpPriceHttpFallback() {
     if (liveFeedMode === 'live') return;
     loadPrices();
@@ -1171,6 +1235,7 @@
   setInterval(function ccpPriceResyncWs() {
     if (liveFeedMode === 'live') loadPrices();
   }, 600000);
+  setInterval(loadSparklines, 300000);
 
   function formatUtcLabel(ts) {
     if (!ts) return '';
@@ -1196,10 +1261,14 @@
       const ch = it.change_pct;
       const chClass = ch > 0 ? 'up' : ch < 0 ? 'down' : 'neutral';
       const chText = ch == null || Number.isNaN(ch) ? '24h —' : `24h ${ch >= 0 ? '+' : ''}${ch.toFixed(2)}%`;
+      const series = it.sparkline;
+      const sparkHtml =
+        Array.isArray(series) && series.length >= 2 ? buildSparklineSvg(series, ch) : '';
       const row = document.createElement('div');
       row.className = 'oil-row';
       row.innerHTML = `
         <span class="label">${escapeHtml(it.label || it.symbol || 'Oil')}</span>
+        <span class="spark-cell">${sparkHtml}</span>
         <span class="usd">${formatUsd(it.usd)}</span>
         <span class="chg ${chClass}">${chText}</span>`;
       oilList.appendChild(row);

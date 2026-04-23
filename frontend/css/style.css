@@ -1014,7 +1014,7 @@ html[data-theme='light'] .live-feed-status.live-feed--live {
 
 .oil-row {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: auto 1fr auto;
   gap: 0.15rem 0.35rem;
   padding: 0.32rem 0.2rem;
   border-radius: 6px;
@@ -1029,9 +1029,35 @@ html[data-theme='light'] .live-feed-status.live-feed--live {
   font-weight: 600;
 }
 
+.oil-row .spark-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+}
+
+.oil-row .spark {
+  display: block;
+  opacity: 0.85;
+}
+
+.oil-row .spark.spark-up {
+  color: #3dd68c;
+}
+
+.oil-row .spark.spark-down {
+  color: #f07178;
+}
+
+.oil-row .spark.spark-neutral {
+  color: var(--muted);
+}
+
 .oil-row .usd {
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.72rem;
+  text-align: right;
+  color: var(--text);
 }
 
 .oil-row .chg {
@@ -1390,7 +1416,7 @@ html[data-theme='light'] .live-feed-status.live-feed--live {
 
 .price-row {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: auto 1fr auto;
   grid-template-rows: auto auto;
   gap: 0.15rem 0.5rem;
   padding: 0.55rem 0.5rem;
@@ -1405,6 +1431,30 @@ html[data-theme='light'] .live-feed-status.live-feed--live {
 .price-row .sym {
   font-weight: 600;
   font-size: 0.9rem;
+}
+
+.price-row .spark-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+}
+
+.price-row .spark {
+  display: block;
+  opacity: 0.85;
+}
+
+.price-row .spark.spark-up {
+  color: #3dd68c;
+}
+
+.price-row .spark.spark-down {
+  color: #f07178;
+}
+
+.price-row .spark.spark-neutral {
+  color: var(--muted);
 }
 
 .price-row .usd {

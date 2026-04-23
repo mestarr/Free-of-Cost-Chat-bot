@@ -38,14 +38,20 @@ LABELS = {
 
 TTL_SECONDS = float(os.getenv("PRICE_CACHE_SECONDS", "10"))
 OIL_TTL_SECONDS = float(os.getenv("OIL_CACHE_SECONDS", "300"))
+# Sparklines update much slower than spot prices — 24h trend shape is stable for minutes.
+SPARKLINE_TTL_SECONDS = float(os.getenv("SPARKLINE_CACHE_SECONDS", "300"))
 # After a 429 we wait this many seconds before hitting CoinGecko again (serve stale in between).
 _RATE_LIMIT_BACKOFF = max(TTL_SECONDS * 6, 60.0)
 MAX_IDS_PER_REQUEST = 40
 MAX_CACHE_BUCKETS = 24
 _PRICE_REDIS_PREFIX = "ccp:price:v1:"
+_SPARK_REDIS_PREFIX = "ccp:spark:v1:"
+# Downsample 168 hourly points (CoinGecko sparkline_in_7d) to this many for UI.
+_SPARK_POINTS = 24
 
 # bucket_key -> {"ts": float, "data": dict | None, "retry_after": float}
 _caches: dict[str, dict] = {}
+_spark_cache: dict[str, dict] = {}
 _oil_cache: dict[str, object] = {"ts": 0.0, "data": {}}
 
 
@@ -222,6 +228,30 @@ async def fetch_prices_json(ids_csv: str | None = None) -> dict:
     return await get_price_data(ids_csv=ids_csv)
 
 
+def _oil_closes_from_payload(payload: dict) -> list[float]:
+    """Daily close prices from Yahoo chart result (ordered oldest → newest)."""
+    try:
+        result = (((payload or {}).get("chart") or {}).get("result") or [None])[0] or {}
+        quotes = (result.get("indicators") or {}).get("quote") or []
+        if not quotes or not isinstance(quotes, list):
+            return []
+        closes = (quotes[0] or {}).get("close")
+        if not isinstance(closes, list):
+            return []
+        out: list[float] = []
+        for p in closes:
+            if p is None or isinstance(p, bool):
+                continue
+            if isinstance(p, int | float):
+                fp = float(p)
+                if fp != fp:  # NaN
+                    continue
+                out.append(fp)
+        return out
+    except Exception:
+        return []
+
+
 def _oil_row_from_chart(payload: dict, symbol: str, label: str) -> dict | None:
     try:
         result = (((payload or {}).get("chart") or {}).get("result") or [None])[0] or {}
@@ -233,11 +263,16 @@ def _oil_row_from_chart(payload: dict, symbol: str, label: str) -> dict | None:
         chg_pct = None
         if prev not in (None, 0):
             chg_pct = ((price - prev) / prev) * 100.0
+        closes = _oil_closes_from_payload(payload)
+        spark: list[float] = []
+        if len(closes) >= 2:
+            spark = _downsample(closes, _SPARK_POINTS) if len(closes) > _SPARK_POINTS else closes
         return {
             "symbol": symbol,
             "label": label,
             "usd": float(price),
             "change_pct": chg_pct,
+            "sparkline": spark,
         }
     except Exception:
         return None
@@ -258,7 +293,7 @@ async def _fetch_oil_prices_upstream() -> dict:
                 url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
                 r = await client.get(
                     url,
-                    params={"interval": "1d", "range": "5d"},
+                    params={"interval": "1d", "range": "1mo"},
                     headers={"User-Agent": "CryptoChatPal/1.0", "Accept": "application/json"},
                 )
                 if r.status_code != 200:
@@ -271,10 +306,10 @@ async def _fetch_oil_prices_upstream() -> dict:
     # Keep stable structure for UI even if upstream is rate-limited/unavailable.
     if not out:
         out = [
-            {"symbol": "CL=F", "label": "WTI Crude", "usd": None, "change_pct": None},
-            {"symbol": "BZ=F", "label": "Brent Crude", "usd": None, "change_pct": None},
-            {"symbol": "GC=F", "label": "Gold", "usd": None, "change_pct": None},
-            {"symbol": "SI=F", "label": "Silver", "usd": None, "change_pct": None},
+            {"symbol": "CL=F", "label": "WTI Crude", "usd": None, "change_pct": None, "sparkline": []},
+            {"symbol": "BZ=F", "label": "Brent Crude", "usd": None, "change_pct": None, "sparkline": []},
+            {"symbol": "GC=F", "label": "Gold", "usd": None, "change_pct": None, "sparkline": []},
+            {"symbol": "SI=F", "label": "Silver", "usd": None, "change_pct": None, "sparkline": []},
         ]
     return {
         "fetched_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -300,3 +335,89 @@ async def fetch_oil_prices_json() -> dict:
         if cached:
             return cached  # type: ignore[return-value]
         return {"fetched_at": "", "items": []}
+
+
+def _downsample(points: list[float], target: int) -> list[float]:
+    """Uniform pick `target` points from `points` (preserves first + last)."""
+    n = len(points)
+    if n <= target or target < 2:
+        return [float(p) for p in points if p is not None]
+    step = (n - 1) / (target - 1)
+    out: list[float] = []
+    for i in range(target):
+        out.append(float(points[round(i * step)]))
+    return out
+
+
+async def _fetch_sparklines_upstream(ids_param: str) -> tuple[dict | None, float]:
+    """CoinGecko /coins/markets returns 7d sparkline in one shot. Slice to last ~24h."""
+    url = "https://api.coingecko.com/api/v3/coins/markets"
+    params = {
+        "vs_currency": "usd",
+        "ids": ids_param,
+        "sparkline": "true",
+        "price_change_percentage": "24h",
+        "per_page": MAX_IDS_PER_REQUEST,
+        "page": 1,
+    }
+    headers = {"Accept": "application/json", "User-Agent": "CryptoChatPal/1.0"}
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.get(url, params=params, headers=headers)
+        if r.status_code == 429:
+            try:
+                ra = float(r.headers.get("retry-after", 0))
+            except (ValueError, TypeError):
+                ra = 0.0
+            return None, ra
+        r.raise_for_status()
+        raw = r.json() or []
+        out: dict[str, list[float]] = {}
+        for coin in raw:
+            if not isinstance(coin, dict):
+                continue
+            cid = coin.get("id")
+            sp = (coin.get("sparkline_in_7d") or {}).get("price") or []
+            if not isinstance(cid, str) or not isinstance(sp, list) or not sp:
+                continue
+            # Last 24 hourly points = last day
+            last24 = [p for p in sp[-24:] if isinstance(p, int | float)]
+            if len(last24) < 2:
+                continue
+            out[cid] = _downsample(last24, _SPARK_POINTS)
+        return out, 0.0
+
+
+async def fetch_sparklines_json(ids_csv: str | None = None) -> dict:
+    """Returns { "bitcoin": [p1, p2, ...], ... } — 24h price series per coin (hourly, downsampled)."""
+    ids_list = _sanitize_ids_list(ids_csv or "") or _default_id_list()
+    bucket = _cache_bucket_key(ids_list)
+    now = time.time()
+
+    ent = _spark_cache.get(bucket)
+    if ent and ent.get("data") is not None and (now - ent["ts"]) < SPARKLINE_TTL_SECONDS:
+        return ent["data"]
+    if ent and ent.get("retry_after", 0.0) > now:
+        return ent.get("data") or {}
+
+    if REDIS_URL:
+        rd = await cache_get_json(_SPARK_REDIS_PREFIX + bucket)
+        if isinstance(rd, dict) and rd:
+            _spark_cache[bucket] = {"ts": now, "data": rd, "retry_after": 0.0}
+            return rd
+
+    try:
+        data, hint = await _fetch_sparklines_upstream(",".join(ids_list))
+        if data is None:
+            backoff = now + (hint if hint > 0 else _RATE_LIMIT_BACKOFF)
+            if ent:
+                ent["ts"] = now
+                ent["retry_after"] = backoff
+            else:
+                _spark_cache[bucket] = {"ts": now, "data": None, "retry_after": backoff}
+            return ent.get("data") if ent else {}
+        _spark_cache[bucket] = {"ts": now, "data": data, "retry_after": 0.0}
+        if REDIS_URL:
+            await cache_set_json(_SPARK_REDIS_PREFIX + bucket, data, int(SPARKLINE_TTL_SECONDS))
+        return data
+    except Exception:
+        return ent.get("data") if ent and ent.get("data") else {}

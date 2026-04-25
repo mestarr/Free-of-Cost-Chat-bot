@@ -21,7 +21,7 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="css/style.css?v=20260404-2" />
+  <link rel="stylesheet" href="css/style.css?v=20260425-fng" />
 </head>
 <body>
   <header>
@@ -207,6 +207,28 @@
           </div>
         </div>
         <div class="macro-top" aria-label="Macro indicators">
+          <section class="macro-card macro-card--fng" aria-label="Crypto Fear and Greed Index">
+            <div class="macro-card-head">
+              <h3>Fear &amp; Greed</h3>
+              <span id="fng-updated" class="sub">Loading…</span>
+            </div>
+            <div id="fng-error" class="hidden"></div>
+            <div id="fng-panel" class="fng-panel">
+              <div class="fng-value-row">
+                <span id="fng-value" class="fng-value" aria-live="polite">—</span>
+                <span id="fng-classification" class="fng-classification"></span>
+              </div>
+              <div class="fng-bar-wrap" role="presentation" aria-hidden="true">
+                <div class="fng-bar-track">
+                  <div class="fng-bar-gradient"></div>
+                  <div id="fng-marker" class="fng-marker" style="left: 0%"></div>
+                </div>
+                <div class="fng-bar-labels"><span>0</span><span>50</span><span>100</span></div>
+              </div>
+              <p id="fng-meta" class="fng-meta sub"></p>
+              <p class="fng-attrib sub">Crypto market sentiment · <a href="https://alternative.me/crypto/fear-and-greed-index/" target="_blank" rel="noopener noreferrer">Alternative.me</a></p>
+            </div>
+          </section>
           <section class="macro-card" aria-label="Commodities prices">
             <div class="macro-card-head">
               <h3>Commodities prices</h3>
@@ -337,6 +359,6 @@
     </aside>
   </div>
 
-  <script src="js/app.js?v=20260404-2" defer></script>
+  <script src="js/app.js?v=20260425-fng" defer></script>
 </body>
 </html>

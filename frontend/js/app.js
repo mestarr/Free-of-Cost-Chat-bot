@@ -1244,6 +1244,94 @@
     return new Date(d).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   }
 
+  function fngZoneClassFromValue(v) {
+    if (v == null || Number.isNaN(v)) return '';
+    if (v <= 24) return 'fng--extreme-fear';
+    if (v <= 44) return 'fng--fear';
+    if (v <= 55) return 'fng--neutral';
+    if (v <= 74) return 'fng--greed';
+    return 'fng--extreme-greed';
+  }
+
+  function formatFngCountdown(sec) {
+    if (sec == null || Number.isNaN(sec) || sec < 0) return '';
+    if (sec < 90) return `Next update in ~${Math.round(sec)}s`;
+    if (sec < 7200) return `Next update in ~${Math.round(sec / 60)} min`;
+    return `Next update in ~${(sec / 3600).toFixed(1)} h`;
+  }
+
+  function parseFngValue(raw) {
+    if (raw == null) return null;
+    if (typeof raw === 'number' && Number.isFinite(raw)) return Math.max(0, Math.min(100, Math.round(raw)));
+    if (typeof raw === 'string' && raw.trim() !== '') {
+      const n = parseInt(raw, 10);
+      return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : null;
+    }
+    return null;
+  }
+
+  function renderFng(data) {
+    const panel = document.getElementById('fng-panel');
+    const valueEl = document.getElementById('fng-value');
+    const classEl = document.getElementById('fng-classification');
+    const markerEl = document.getElementById('fng-marker');
+    const metaEl = document.getElementById('fng-meta');
+    const updatedEl = document.getElementById('fng-updated');
+    const errEl = document.getElementById('fng-error');
+    if (!panel || !valueEl || !classEl || !markerEl || !metaEl) return;
+    if (errEl) errEl.classList.add('hidden');
+    const v = parseFngValue(data && data.value);
+    if (v == null) {
+      valueEl.textContent = '—';
+      classEl.textContent = '';
+      classEl.className = 'fng-classification';
+      markerEl.style.left = '0%';
+      metaEl.textContent = '';
+      if (updatedEl) updatedEl.textContent = '';
+      if (errEl) {
+        errEl.textContent = 'Fear & Greed data unavailable right now.';
+        errEl.classList.remove('hidden');
+      }
+      return;
+    }
+    valueEl.textContent = String(v);
+    const label = (data.classification && String(data.classification).trim()) || '';
+    classEl.textContent = label;
+    classEl.className = 'fng-classification ' + fngZoneClassFromValue(v);
+    markerEl.style.left = `${Math.max(0, Math.min(100, v))}%`;
+    const parts = [];
+    const nu = formatFngCountdown(data.next_update_in_seconds);
+    if (nu) parts.push(nu);
+    const stamp = data.updated_at ? formatUtcLabel(data.updated_at) : '';
+    if (stamp) parts.push(`Index time · ${stamp}`);
+    metaEl.textContent = parts.join(' · ');
+    if (updatedEl) updatedEl.textContent = stamp ? `Updated · ${stamp}` : 'Updated';
+  }
+
+  async function loadFng() {
+    const panel = document.getElementById('fng-panel');
+    const updatedEl = document.getElementById('fng-updated');
+    const errEl = document.getElementById('fng-error');
+    if (!panel) return;
+    try {
+      const res = await fetch('/api/markets/fear-greed', { headers: ccpApiAuthHeaders() });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const d = data.detail;
+        const msg =
+          typeof d === 'string' ? d : (d && JSON.stringify(d)) || res.statusText || 'Failed';
+        throw new Error(msg);
+      }
+      renderFng(data);
+    } catch (e) {
+      if (errEl) {
+        errEl.textContent = 'Could not load Fear & Greed index.';
+        errEl.classList.remove('hidden');
+      }
+      if (updatedEl) updatedEl.textContent = '';
+    }
+  }
+
   function renderOil(data) {
     if (!oilList || !oilUpdated || !oilError) return;
     oilError.classList.add('hidden');
@@ -1344,8 +1432,10 @@
   }
 
   loadOil();
+  loadFng();
   loadFedNews();
   setInterval(loadOil, 300000);
+  setInterval(loadFng, 300000);
   setInterval(loadFedNews, 300000);
 
   function formatNewsTime(pub) {
@@ -1536,6 +1626,7 @@
       } else if (msg.type === 'macro') {
         if (msg.oil) renderOil(msg.oil);
         if (msg.fed) renderFedNews(msg.fed);
+        if (msg.fng) renderFng(msg.fng);
       }
     };
     liveWs.onerror = () => {};

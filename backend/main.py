@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from .accounts import init_db as init_accounts_db
 from .admin_routes import me_router
 from .admin_routes import router as admin_router
+from .fng import fetch_fear_greed_json
 from .llm_tools import GROQ_TOOLS, execute_tool, normalize_trade_card
 from .news import fetch_news_snapshot_for_llm, get_fed_news_api_payload, get_news_api_payload, llm_news_grounding_note
 from .observability import RequestLoggingMiddleware, counters_snapshot
@@ -795,6 +796,15 @@ async def api_markets_oil():
         return await fetch_oil_prices_json()
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Oil market feed unavailable: {e!s}") from e
+
+
+@app.get("/api/markets/fear-greed")
+async def api_markets_fear_greed():
+    """Crypto Fear & Greed Index (0–100) from Alternative.me; cached server-side."""
+    try:
+        return await fetch_fear_greed_json()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Fear & Greed feed unavailable: {e!s}") from e
 
 
 @app.post("/api/chat", response_model=ChatResponse)

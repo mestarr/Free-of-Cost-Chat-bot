@@ -21,7 +21,7 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="css/style.css?v=20260425-fng" />
+  <link rel="stylesheet" href="css/style.css?v=20260426-layout-left" />
 </head>
 <body>
   <header>
@@ -92,7 +92,96 @@
   </header>
 
   <div class="layout">
-    <aside class="side-column side-column--news" aria-label="Latest headlines">
+    <aside class="side-column side-column--news" aria-label="Market, alerts, and news">
+      <div class="left-column-tools">
+        <section class="macro-card macro-card--fng" aria-label="Crypto Fear and Greed Index">
+          <div class="macro-card-head">
+            <h3>Fear &amp; Greed</h3>
+            <span id="fng-updated" class="sub">Loading…</span>
+          </div>
+          <div id="fng-error" class="hidden"></div>
+          <div id="fng-panel" class="fng-panel">
+            <div class="fng-value-row">
+              <span id="fng-value" class="fng-value" aria-live="polite">—</span>
+              <span id="fng-classification" class="fng-classification"></span>
+            </div>
+            <div class="fng-bar-wrap" role="presentation" aria-hidden="true">
+              <div class="fng-bar-track">
+                <div class="fng-bar-gradient"></div>
+                <div id="fng-marker" class="fng-marker" style="left: 0%"></div>
+              </div>
+              <div class="fng-bar-labels"><span>0</span><span>50</span><span>100</span></div>
+            </div>
+            <p id="fng-meta" class="fng-meta sub"></p>
+            <p class="fng-attrib sub">Crypto market sentiment · <a href="https://alternative.me/crypto/fear-and-greed-index/" target="_blank" rel="noopener noreferrer">Alternative.me</a></p>
+          </div>
+        </section>
+        <section class="alerts-panel" aria-label="Price alerts">
+          <div class="portfolio-header-row">
+            <h2 class="portfolio-heading">Price alerts</h2>
+            <div class="alerts-header-actions">
+              <label class="alerts-sound-label">
+                <input type="checkbox" id="alerts-sound" />
+                <span>Beep</span>
+              </label>
+              <button type="button" id="alerts-notify-btn" class="prices-edit-toggle">Enable notifications</button>
+            </div>
+          </div>
+          <p class="sub portfolio-privacy">Saved in this browser only. Alerts trigger on live price updates.</p>
+          <div class="alerts-presets" role="group" aria-label="Quick add drop alerts">
+            <span class="alerts-presets-label">Quick add</span>
+            <button type="button" class="alerts-preset-btn" data-preset="top3-3" title="Add −3% / 60 min for the first 3 watchlist coins">
+              Top 3 · −3% / 60m
+            </button>
+            <button type="button" class="alerts-preset-btn" data-preset="top3-5" title="Add −5% / 60 min for the first 3 watchlist coins">
+              Top 3 · −5% / 60m
+            </button>
+            <button type="button" class="alerts-preset-btn" data-preset="all-3" title="Add −3% / 60 min for every watchlist coin">
+              All · −3% / 60m
+            </button>
+          </div>
+          <div class="alerts-add-row">
+            <label class="visually-hidden" for="alerts-coin-select">Coin</label>
+            <select id="alerts-coin-select" class="prices-select">
+              <option value="">Coin…</option>
+            </select>
+            <label class="visually-hidden" for="alerts-type-select">Alert type</label>
+            <select id="alerts-type-select" class="prices-select prices-select--narrow">
+              <option value="cross_above">Crosses above</option>
+              <option value="cross_below">Crosses below</option>
+              <option value="drop_pct_window">Drops by % in window</option>
+            </select>
+          </div>
+          <div class="alerts-add-row">
+            <label class="visually-hidden" for="alerts-threshold-input">Threshold</label>
+            <input
+              type="text"
+              id="alerts-threshold-input"
+              class="prices-input prices-input--qty"
+              placeholder="Price USD or %"
+              inputmode="decimal"
+              autocomplete="off"
+            />
+            <label class="visually-hidden" for="alerts-window-input">Window minutes</label>
+            <input
+              type="text"
+              id="alerts-window-input"
+              class="prices-input prices-input--qty"
+              placeholder="Window min"
+              inputmode="numeric"
+              autocomplete="off"
+            />
+            <button type="button" id="alerts-add-btn" class="prices-btn">Add alert</button>
+          </div>
+          <div id="alerts-status" class="sub alerts-status"></div>
+          <div id="alerts-list" class="alerts-list"></div>
+          <div class="alerts-history-head">
+            <span class="alerts-history-title">Recent hits</span>
+            <button type="button" id="alerts-history-clear" class="alerts-history-clear" title="Clear history">Clear</button>
+          </div>
+          <div id="alerts-history" class="alerts-history" aria-live="polite"></div>
+        </section>
+      </div>
       <section class="news-panel" aria-label="Latest crypto news">
         <div class="news-header">
           <div class="news-header-top">
@@ -207,28 +296,6 @@
           </div>
         </div>
         <div class="macro-top" aria-label="Macro indicators">
-          <section class="macro-card macro-card--fng" aria-label="Crypto Fear and Greed Index">
-            <div class="macro-card-head">
-              <h3>Fear &amp; Greed</h3>
-              <span id="fng-updated" class="sub">Loading…</span>
-            </div>
-            <div id="fng-error" class="hidden"></div>
-            <div id="fng-panel" class="fng-panel">
-              <div class="fng-value-row">
-                <span id="fng-value" class="fng-value" aria-live="polite">—</span>
-                <span id="fng-classification" class="fng-classification"></span>
-              </div>
-              <div class="fng-bar-wrap" role="presentation" aria-hidden="true">
-                <div class="fng-bar-track">
-                  <div class="fng-bar-gradient"></div>
-                  <div id="fng-marker" class="fng-marker" style="left: 0%"></div>
-                </div>
-                <div class="fng-bar-labels"><span>0</span><span>50</span><span>100</span></div>
-              </div>
-              <p id="fng-meta" class="fng-meta sub"></p>
-              <p class="fng-attrib sub">Crypto market sentiment · <a href="https://alternative.me/crypto/fear-and-greed-index/" target="_blank" rel="noopener noreferrer">Alternative.me</a></p>
-            </div>
-          </section>
           <section class="macro-card" aria-label="Commodities prices">
             <div class="macro-card-head">
               <h3>Commodities prices</h3>
@@ -359,6 +426,6 @@
     </aside>
   </div>
 
-  <script src="js/app.js?v=20260425-fng" defer></script>
+  <script src="js/app.js?v=20260426-layout-left" defer></script>
 </body>
 </html>

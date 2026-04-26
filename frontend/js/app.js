@@ -22,6 +22,18 @@
   const pricesCustomSym = document.getElementById('prices-custom-sym');
   const pricesAddCustom = document.getElementById('prices-add-custom');
   const pricesResetDefault = document.getElementById('prices-reset-default');
+  const alertsCoinSelect = document.getElementById('alerts-coin-select');
+  const alertsTypeSelect = document.getElementById('alerts-type-select');
+  const alertsThresholdInput = document.getElementById('alerts-threshold-input');
+  const alertsWindowInput = document.getElementById('alerts-window-input');
+  const alertsAddBtn = document.getElementById('alerts-add-btn');
+  const alertsList = document.getElementById('alerts-list');
+  const alertsStatus = document.getElementById('alerts-status');
+  const alertsNotifyBtn = document.getElementById('alerts-notify-btn');
+  const alertsSoundChk = document.getElementById('alerts-sound');
+  const alertsHistoryEl = document.getElementById('alerts-history');
+  const alertsHistoryClear = document.getElementById('alerts-history-clear');
+  const alertsPresetsEl = document.querySelector('.alerts-presets');
   const oilList = document.getElementById('oil-list');
   const oilUpdated = document.getElementById('oil-updated');
   const oilError = document.getElementById('oil-error');
@@ -32,6 +44,9 @@
   const themeDarkBtn = document.getElementById('theme-dark');
 
   const PRICE_STORAGE_KEY = 'cryptochatpal_price_rows';
+  const PRICE_ALERTS_KEY = 'cryptochatpal_price_alerts';
+  const PRICE_ALERTS_SOUND_KEY = 'cryptochatpal_alerts_sound';
+  const PRICE_ALERT_LOG_KEY = 'cryptochatpal_price_alert_log';
   const THEME_KEY = 'cryptochatpal_theme';
   /** Optional SaaS API key (set via localStorage when server uses CCP_AUTH_MODE=required). */
   const CCP_API_KEY_STORAGE = 'ccp_api_key';
@@ -771,6 +786,395 @@
     return out.join(',');
   }
 
+  const MAX_PRICE_ALERTS = 40;
+  const ALERT_COOLDOWN_MS = 5 * 60 * 1000;
+  const MAX_ALERT_LOG = 30;
+  let priceAlerts = loadPriceAlerts();
+  let priceHistoryById = {};
+  let alertHitLog = loadAlertHitLog();
+  let alertAudioCtx = null;
+
+  function loadAlertHitLog() {
+    try {
+      const raw = localStorage.getItem(PRICE_ALERT_LOG_KEY);
+      if (!raw) return [];
+      const arr = JSON.parse(raw);
+      if (!Array.isArray(arr)) return [];
+      return arr
+        .filter((x) => x && typeof x === 'object' && Number.isFinite(Number(x.t)))
+        .map((x) => ({
+          t: Number(x.t),
+          sym: String(x.sym || '').slice(0, 20),
+          type: String(x.type || '').slice(0, 32),
+          text: String(x.text || '').slice(0, 400),
+        }))
+        .slice(0, MAX_ALERT_LOG);
+    } catch {
+      return [];
+    }
+  }
+
+  function saveAlertHitLog() {
+    try {
+      localStorage.setItem(PRICE_ALERT_LOG_KEY, JSON.stringify(alertHitLog.slice(0, MAX_ALERT_LOG)));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function recordAlertHit(text, sym, type) {
+    const entry = { t: Date.now(), sym, type, text: String(text || '') };
+    alertHitLog.unshift(entry);
+    alertHitLog = alertHitLog.slice(0, MAX_ALERT_LOG);
+    saveAlertHitLog();
+    renderAlertHistory();
+  }
+
+  function clearAlertHistory() {
+    alertHitLog = [];
+    saveAlertHitLog();
+    renderAlertHistory();
+  }
+
+  function renderAlertHistory() {
+    if (!alertsHistoryEl) return;
+    if (!alertHitLog.length) {
+      alertsHistoryEl.innerHTML = '<div class="alerts-history-empty sub">No triggers yet.</div>';
+      return;
+    }
+    const html = alertHitLog
+      .map((e) => {
+        const when = new Date(e.t);
+        const timeStr = Number.isNaN(when.getTime()) ? '—' : when.toLocaleString();
+        return `<div class="alerts-history-item"><time datetime="${e.t}">${escapeHtml(
+          timeStr
+        )}</time><div class="alerts-history-text"><strong>${escapeHtml(e.sym)}</strong> · ${escapeHtml(
+          e.text
+        )}</div></div>`;
+      })
+      .join('');
+    alertsHistoryEl.innerHTML = html;
+  }
+
+  function getAlertsSoundOn() {
+    if (alertsSoundChk) return Boolean(alertsSoundChk.checked);
+    try {
+      return localStorage.getItem(PRICE_ALERTS_SOUND_KEY) === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  function applyAlertsSoundPrefToUi() {
+    if (!alertsSoundChk) return;
+    try {
+      const v = localStorage.getItem(PRICE_ALERTS_SOUND_KEY);
+      alertsSoundChk.checked = v === '1' || v === 'true';
+    } catch {
+      alertsSoundChk.checked = false;
+    }
+  }
+
+  function playAlertBeep() {
+    if (!getAlertsSoundOn()) return;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      if (!alertAudioCtx) alertAudioCtx = new Ctx();
+      const ctx = alertAudioCtx;
+      if (ctx.state === 'suspended') void ctx.resume();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(880, ctx.currentTime);
+      g.gain.setValueAtTime(0.0001, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.1, ctx.currentTime + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.14);
+      o.connect(g);
+      g.connect(ctx.destination);
+      o.start();
+      o.stop(ctx.currentTime + 0.15);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function hasDropDuplicate(id, threshold, windowMin) {
+    return priceAlerts.some(
+      (a) =>
+        a.id === id &&
+        a.type === 'drop_pct_window' &&
+        Number(a.threshold) === Number(threshold) &&
+        Number(a.windowMin) === Number(windowMin)
+    );
+  }
+
+  function addDropAlertsForRows(rows, pct, windowMin) {
+    const w = Math.max(5, Math.min(24 * 60, Number(windowMin) || 60));
+    const p = Math.abs(Number(pct));
+    if (!Number.isFinite(p) || p <= 0) {
+      setAlertsStatus('Invalid preset percent.');
+      return 0;
+    }
+    let added = 0;
+    for (const r of rows) {
+      if (!r || !r.id) continue;
+      if (hasDropDuplicate(r.id, p, w)) continue;
+      if (priceAlerts.length >= MAX_PRICE_ALERTS) break;
+      priceAlerts.push({
+        id: r.id,
+        sym: r.sym,
+        type: 'drop_pct_window',
+        threshold: p,
+        windowMin: w,
+        enabled: true,
+        lastTriggeredAt: 0,
+      });
+      added += 1;
+    }
+    if (added) {
+      savePriceAlerts();
+      renderAlertsList();
+      setAlertsStatus(
+        `Added ${added} drop alert(s): −${p}% in ${w} min.`
+      );
+    } else {
+      setAlertsStatus('No new alerts (duplicates or list full).');
+    }
+    return added;
+  }
+
+  function coinSymById(id) {
+    const fromRows = priceRows.find((r) => r.id === id);
+    if (fromRows) return fromRows.sym;
+    const fromPreset = COIN_PRESETS.find((p) => p.id === id);
+    if (fromPreset) return fromPreset.sym;
+    return String(id || '').slice(0, 12).toUpperCase();
+  }
+
+  function loadPriceAlerts() {
+    try {
+      const raw = localStorage.getItem(PRICE_ALERTS_KEY);
+      if (!raw) return [];
+      const arr = JSON.parse(raw);
+      if (!Array.isArray(arr)) return [];
+      const out = [];
+      for (const x of arr) {
+        if (!x || typeof x !== 'object') continue;
+        const id = sanitizeCoinId(x.id || '');
+        const type = String(x.type || '');
+        const threshold = Number(x.threshold);
+        const windowMin = Number(x.windowMin || 60);
+        if (!id || !Number.isFinite(threshold) || threshold <= 0) continue;
+        if (!['cross_above', 'cross_below', 'drop_pct_window'].includes(type)) continue;
+        out.push({
+          id,
+          sym: sanitizeSym(x.sym || '') || coinSymById(id),
+          type,
+          threshold,
+          windowMin: Math.max(5, Math.min(24 * 60, Number.isFinite(windowMin) ? windowMin : 60)),
+          enabled: x.enabled !== false,
+          lastTriggeredAt:
+            Number.isFinite(Number(x.lastTriggeredAt)) && Number(x.lastTriggeredAt) > 0
+              ? Number(x.lastTriggeredAt)
+              : 0,
+        });
+      }
+      return out.slice(0, MAX_PRICE_ALERTS);
+    } catch {
+      return [];
+    }
+  }
+
+  function savePriceAlerts() {
+    try {
+      localStorage.setItem(PRICE_ALERTS_KEY, JSON.stringify(priceAlerts.slice(0, MAX_PRICE_ALERTS)));
+    } catch {
+      /* ignore quota */
+    }
+  }
+
+  function setAlertsStatus(msg) {
+    if (!alertsStatus) return;
+    alertsStatus.textContent = msg || '';
+  }
+
+  function alertTypeLabel(a) {
+    if (a.type === 'cross_above') return `crosses above ${formatUsd(a.threshold)}`;
+    if (a.type === 'cross_below') return `crosses below ${formatUsd(a.threshold)}`;
+    return `drops ${a.threshold}% in ${a.windowMin} min`;
+  }
+
+  function refreshNotifyButton() {
+    if (!alertsNotifyBtn) return;
+    if (!('Notification' in window)) {
+      alertsNotifyBtn.textContent = 'Notifications unavailable';
+      alertsNotifyBtn.disabled = true;
+      return;
+    }
+    const p = Notification.permission;
+    if (p === 'granted') {
+      alertsNotifyBtn.textContent = 'Notifications enabled';
+      alertsNotifyBtn.disabled = true;
+    } else if (p === 'denied') {
+      alertsNotifyBtn.textContent = 'Notifications blocked';
+      alertsNotifyBtn.disabled = true;
+    } else {
+      alertsNotifyBtn.textContent = 'Enable notifications';
+      alertsNotifyBtn.disabled = false;
+    }
+  }
+
+  function renderAlertsList() {
+    if (!alertsList) return;
+    alertsList.innerHTML = '';
+    if (!priceAlerts.length) {
+      const p = document.createElement('div');
+      p.className = 'news-snippet';
+      p.textContent = 'No alerts yet. Add one above.';
+      alertsList.appendChild(p);
+      return;
+    }
+    priceAlerts.forEach((a, idx) => {
+      const row = document.createElement('div');
+      row.className = 'alert-row';
+      row.innerHTML = `
+        <label class="alert-toggle">
+          <input type="checkbox" data-act="toggle" data-i="${idx}" ${a.enabled ? 'checked' : ''} />
+          <span>${escapeHtml(a.sym)}</span>
+        </label>
+        <span class="alert-rule">${escapeHtml(alertTypeLabel(a))}</span>
+        <button type="button" class="prices-row-btn danger" data-act="del" data-i="${idx}" aria-label="Remove alert">×</button>
+      `;
+      alertsList.appendChild(row);
+    });
+  }
+
+  function fillAlertsCoinSelect() {
+    if (!alertsCoinSelect) return;
+    const keep = alertsCoinSelect.value;
+    alertsCoinSelect.innerHTML = '<option value="">Coin…</option>';
+    const seen = new Set();
+    for (const r of priceRows) {
+      if (!r.id || seen.has(r.id)) continue;
+      seen.add(r.id);
+      const o = document.createElement('option');
+      o.value = r.id;
+      o.textContent = `${r.sym} · ${r.id}`;
+      alertsCoinSelect.appendChild(o);
+    }
+    if (keep && seen.has(keep)) alertsCoinSelect.value = keep;
+  }
+
+  function syncAlertTypeInputs() {
+    if (!alertsTypeSelect || !alertsWindowInput) return;
+    const isDrop = alertsTypeSelect.value === 'drop_pct_window';
+    alertsWindowInput.disabled = !isDrop;
+    alertsWindowInput.placeholder = isDrop ? 'Window min' : 'n/a';
+  }
+
+  async function requestNotificationPermission() {
+    if (!('Notification' in window)) {
+      setAlertsStatus('Browser notifications are not supported here.');
+      refreshNotifyButton();
+      return;
+    }
+    if (Notification.permission === 'granted') {
+      setAlertsStatus('Notifications already enabled.');
+      refreshNotifyButton();
+      return;
+    }
+    try {
+      const p = await Notification.requestPermission();
+      if (p === 'granted') setAlertsStatus('Notifications enabled.');
+      else if (p === 'denied') setAlertsStatus('Notifications blocked by browser.');
+      else setAlertsStatus('Notification permission dismissed.');
+    } catch {
+      setAlertsStatus('Could not request notification permission.');
+    }
+    refreshNotifyButton();
+  }
+
+  function notifyAlert(title, body) {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    try {
+      // Keep lightweight and non-blocking for rapid price updates.
+      new Notification(title, { body, silent: false });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function evaluatePriceAlerts(current, previous, nowMs) {
+    if (!current || typeof current !== 'object') return;
+    const maxWindowMin = Math.max(
+      5,
+      priceAlerts.reduce((m, a) => (a.type === 'drop_pct_window' ? Math.max(m, a.windowMin || 60) : m), 5)
+    );
+    const keepMs = maxWindowMin * 60 * 1000 + 2 * 60 * 1000;
+    for (const [id, row] of Object.entries(current)) {
+      const usd = row && typeof row.usd === 'number' ? row.usd : null;
+      if (usd == null || Number.isNaN(usd)) continue;
+      const hist = priceHistoryById[id] || [];
+      hist.push({ t: nowMs, p: usd });
+      const cutoff = nowMs - keepMs;
+      while (hist.length > 2 && hist[0].t < cutoff) hist.shift();
+      priceHistoryById[id] = hist;
+    }
+
+    let changed = false;
+    for (const a of priceAlerts) {
+      if (!a.enabled) continue;
+      const cur = current[a.id];
+      const prev = previous && previous[a.id];
+      const curUsd = cur && typeof cur.usd === 'number' ? cur.usd : null;
+      const prevUsd = prev && typeof prev.usd === 'number' ? prev.usd : null;
+      if (curUsd == null || Number.isNaN(curUsd)) continue;
+      if (nowMs - (a.lastTriggeredAt || 0) < ALERT_COOLDOWN_MS) continue;
+      let fire = false;
+      let body = '';
+      if (a.type === 'cross_above' && prevUsd != null && prevUsd < a.threshold && curUsd >= a.threshold) {
+        fire = true;
+        body = `${a.sym} crossed above ${formatUsd(a.threshold)} (now ${formatUsd(curUsd)}).`;
+      } else if (
+        a.type === 'cross_below' &&
+        prevUsd != null &&
+        prevUsd > a.threshold &&
+        curUsd <= a.threshold
+      ) {
+        fire = true;
+        body = `${a.sym} crossed below ${formatUsd(a.threshold)} (now ${formatUsd(curUsd)}).`;
+      } else if (a.type === 'drop_pct_window') {
+        const hist = priceHistoryById[a.id] || [];
+        const cutoff = nowMs - a.windowMin * 60 * 1000;
+        let ref = null;
+        for (let i = 0; i < hist.length; i += 1) {
+          if (hist[i].t >= cutoff) {
+            ref = hist[i].p;
+            break;
+          }
+        }
+        if (ref == null && hist.length) ref = hist[0].p;
+        if (ref != null && ref > 0) {
+          const pct = ((curUsd - ref) / ref) * 100;
+          if (pct <= -Math.abs(a.threshold)) {
+            fire = true;
+            body = `${a.sym} is down ${Math.abs(pct).toFixed(2)}% in ${a.windowMin} min (now ${formatUsd(curUsd)}).`;
+          }
+        }
+      }
+      if (fire) {
+        a.lastTriggeredAt = nowMs;
+        changed = true;
+        notifyAlert(`Crypto ChatPal alert: ${a.sym}`, body);
+        recordAlertHit(body, a.sym, a.type);
+        playAlertBeep();
+        setAlertsStatus(body);
+      }
+    }
+    if (changed) savePriceAlerts();
+  }
+
   const portfolioSummaryEl = document.getElementById('portfolio-summary');
   const portfolioDisplayEl = document.getElementById('portfolio-display');
   const portfolioEditor = document.getElementById('portfolio-editor');
@@ -933,7 +1337,9 @@
 
   function renderPrices(data) {
     pricesError.classList.add('hidden');
+    const prevPricesPayload = lastPricesPayload;
     lastPricesPayload = data && typeof data === 'object' ? data : {};
+    evaluatePriceAlerts(lastPricesPayload, prevPricesPayload, Date.now());
     const orderKey = priceRows.map((r) => r.id).join('|');
     const sparkKey = Object.keys(lastSparklines).sort().join(',');
     const composite =
@@ -1051,6 +1457,7 @@
     savePriceRows(priceRows);
     lastRenderKey = '';
     renderEditorRows();
+    fillAlertsCoinSelect();
     renderPrices(lastPricesPayload);
     loadPrices();
     loadSparklines();
@@ -1137,6 +1544,125 @@
       persistPriceRowsAndRedraw();
     });
   }
+
+  if (alertsTypeSelect) {
+    alertsTypeSelect.addEventListener('change', () => {
+      syncAlertTypeInputs();
+    });
+  }
+
+  if (alertsAddBtn) {
+    alertsAddBtn.addEventListener('click', () => {
+      const id = sanitizeCoinId(alertsCoinSelect && alertsCoinSelect.value);
+      const type = alertsTypeSelect ? alertsTypeSelect.value : '';
+      const threshold = parseFloat(String((alertsThresholdInput && alertsThresholdInput.value) || '').replace(/,/g, ''));
+      const windowMin = parseInt(
+        String((alertsWindowInput && alertsWindowInput.value) || '60').replace(/[^0-9]/g, ''),
+        10
+      );
+      if (!id) {
+        setAlertsStatus('Pick a coin first.');
+        return;
+      }
+      if (!['cross_above', 'cross_below', 'drop_pct_window'].includes(type)) {
+        setAlertsStatus('Pick a valid alert type.');
+        return;
+      }
+      if (!Number.isFinite(threshold) || threshold <= 0) {
+        setAlertsStatus(type === 'drop_pct_window' ? 'Enter a valid % drop.' : 'Enter a valid USD threshold.');
+        return;
+      }
+      if (type === 'drop_pct_window' && (!Number.isFinite(windowMin) || windowMin < 5)) {
+        setAlertsStatus('Window must be at least 5 minutes.');
+        return;
+      }
+      if (priceAlerts.length >= MAX_PRICE_ALERTS) {
+        setAlertsStatus(`Max ${MAX_PRICE_ALERTS} alerts reached.`);
+        return;
+      }
+      priceAlerts.push({
+        id,
+        sym: coinSymById(id),
+        type,
+        threshold: threshold,
+        windowMin: type === 'drop_pct_window' ? Math.min(windowMin, 24 * 60) : 60,
+        enabled: true,
+        lastTriggeredAt: 0,
+      });
+      savePriceAlerts();
+      renderAlertsList();
+      if (alertsThresholdInput) alertsThresholdInput.value = '';
+      if (alertsWindowInput && type === 'drop_pct_window') alertsWindowInput.value = '';
+      setAlertsStatus('Alert added.');
+    });
+  }
+
+  if (alertsList) {
+    alertsList.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-act="del"]');
+      if (!btn || !alertsList.contains(btn)) return;
+      const i = parseInt(btn.dataset.i, 10);
+      if (Number.isNaN(i) || i < 0 || i >= priceAlerts.length) return;
+      priceAlerts.splice(i, 1);
+      savePriceAlerts();
+      renderAlertsList();
+      setAlertsStatus('Alert removed.');
+    });
+    alertsList.addEventListener('change', (e) => {
+      const inp = e.target.closest('input[data-act="toggle"]');
+      if (!inp || !alertsList.contains(inp)) return;
+      const i = parseInt(inp.dataset.i, 10);
+      if (Number.isNaN(i) || i < 0 || i >= priceAlerts.length) return;
+      priceAlerts[i].enabled = Boolean(inp.checked);
+      savePriceAlerts();
+    });
+  }
+
+  if (alertsNotifyBtn) {
+    alertsNotifyBtn.addEventListener('click', () => {
+      requestNotificationPermission();
+    });
+  }
+
+  if (alertsSoundChk) {
+    applyAlertsSoundPrefToUi();
+    alertsSoundChk.addEventListener('change', () => {
+      try {
+        localStorage.setItem(PRICE_ALERTS_SOUND_KEY, alertsSoundChk.checked ? '1' : '0');
+      } catch {
+        /* ignore */
+      }
+      if (alertsSoundChk.checked) playAlertBeep();
+    });
+  }
+
+  if (alertsHistoryClear) {
+    alertsHistoryClear.addEventListener('click', () => {
+      clearAlertHistory();
+      setAlertsStatus('Alert history cleared.');
+    });
+  }
+
+  if (alertsPresetsEl) {
+    alertsPresetsEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-preset]');
+      if (!btn || !alertsPresetsEl.contains(btn)) return;
+      const preset = btn.getAttribute('data-preset') || '';
+      if (preset === 'top3-3') {
+        addDropAlertsForRows(priceRows.slice(0, 3), 3, 60);
+      } else if (preset === 'top3-5') {
+        addDropAlertsForRows(priceRows.slice(0, 3), 5, 60);
+      } else if (preset === 'all-3') {
+        addDropAlertsForRows([...priceRows], 3, 60);
+      }
+    });
+  }
+
+  fillAlertsCoinSelect();
+  syncAlertTypeInputs();
+  renderAlertsList();
+  renderAlertHistory();
+  refreshNotifyButton();
 
   if (portfolioEditToggle && portfolioEditor) {
     portfolioEditToggle.addEventListener('click', () => {

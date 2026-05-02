@@ -1746,7 +1746,7 @@ html[data-theme='light'] .live-feed-status.live-feed--live {
 
 .price-row {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto 1fr auto max-content;
   grid-template-rows: auto auto;
   gap: 0.15rem 0.5rem;
   padding: 0.55rem 0.5rem;
@@ -1794,8 +1794,38 @@ html[data-theme='light'] .live-feed-status.live-feed--live {
   color: var(--text);
 }
 
+.price-row .why-move-btn {
+  grid-column: 4;
+  grid-row: 1;
+  align-self: center;
+  font-family: inherit;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  padding: 0.22rem 0.4rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--accent);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.price-row .why-move-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: rgba(0, 212, 170, 0.08);
+}
+
+.price-row .why-move-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .price-row .chg {
   grid-column: 1 / -1;
+  grid-row: 2;
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.72rem;
 }

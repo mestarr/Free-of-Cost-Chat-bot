@@ -255,6 +255,40 @@
     { id: 'maker', sym: 'MKR' },
   ];
 
+  /** Extra lowercase phrases to match RSS text to a CoinGecko id (beyond ticker + id segments). */
+  const COIN_NEWS_EXTRA = {
+    bitcoin: ['bitcoin', 'btc', 'satoshi'],
+    ethereum: ['ethereum', 'ether', 'eth '],
+    solana: ['solana'],
+    ripple: ['ripple', 'xrp'],
+    cardano: ['cardano', 'ada '],
+    dogecoin: ['dogecoin', 'doge'],
+    'matic-network': ['polygon', 'matic'],
+    'avalanche-2': ['avalanche', 'avax'],
+    sui: [' sui '],
+    chainlink: ['chainlink', 'link '],
+    polkadot: ['polkadot', 'dot '],
+    binancecoin: ['bnb', 'binance'],
+    'shiba-inu': ['shiba', 'shib'],
+    litecoin: ['litecoin', 'ltc'],
+    uniswap: ['uniswap', 'uni '],
+    cosmos: ['cosmos', 'atom '],
+    near: ['near protocol', 'near '],
+    aptos: ['aptos'],
+    arbitrum: ['arbitrum', 'arb '],
+    optimism: ['optimism', 'op '],
+    stellar: ['stellar', 'xlm'],
+    monero: ['monero', 'xmr'],
+    tron: ['tron', 'trx'],
+    'internet-computer': ['internet computer', 'icp '],
+    filecoin: ['filecoin', 'fil '],
+    'hedera-hashgraph': ['hedera', 'hbar'],
+    'render-token': ['render', 'rndr'],
+    'immutable-x': ['immutable', 'imx'],
+    'the-graph': ['the graph', 'grt'],
+    maker: ['maker', 'mkr'],
+  };
+
   function escapeHtml(s) {
     const div = document.createElement('div');
     div.textContent = s;
@@ -1362,6 +1396,7 @@
           <span class="sym">${escapeHtml(sym)}</span>
           <span class="spark-cell"></span>
           <span class="usd">—</span>
+          <button type="button" class="why-move-btn" data-coin-id="${escapeHtml(id)}" data-coin-sym="${escapeHtml(sym)}" title="Ask AI (spot may be missing)">Why move?</button>
           <span class="chg neutral">No data</span>`;
         pricesList.appendChild(div);
         continue;
@@ -1380,6 +1415,7 @@
           <span class="sym">${escapeHtml(sym)}</span>
           <span class="spark-cell">${sparkHtml}</span>
           <span class="usd">${formatUsd(row.usd)}</span>
+          <button type="button" class="why-move-btn" data-coin-id="${escapeHtml(id)}" data-coin-sym="${escapeHtml(sym)}" title="Ask AI why this coin moved (uses spot + RSS headlines)">Why move?</button>
           <span class="chg ${chClass}">${chText}</span>`;
       pricesList.appendChild(div);
     }
@@ -2078,6 +2114,113 @@
     }
   }
 
+  function clipText(s, n) {
+    const t = String(s || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (t.length <= n) return t;
+    return t.slice(0, n - 1) + '…';
+  }
+
+  function headlineMentionsCoin(sym, coinId, blob) {
+    const hay = String(blob).toLowerCase();
+    const sy = String(sym).toLowerCase().trim();
+    if (sy.length >= 2) {
+      try {
+        const re = new RegExp(`\\b${sy.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+        if (re.test(blob)) return true;
+      } catch {
+        if (hay.includes(sy)) return true;
+      }
+    }
+    const id = String(coinId).toLowerCase();
+    for (const part of id.split('-')) {
+      if (part.length < 4) continue;
+      if (hay.includes(part)) return true;
+    }
+    const extras = COIN_NEWS_EXTRA[id];
+    if (extras) {
+      for (const x of extras) {
+        if (hay.includes(String(x).toLowerCase())) return true;
+      }
+    }
+    return false;
+  }
+
+  function pickHeadlinesForWhyMove(sym, coinId, items, maxRel, maxFb) {
+    const rel = [];
+    const rest = [];
+    for (const it of items) {
+      if (!it || typeof it !== 'object') continue;
+      const blob = `${it.title || ''} ${it.summary || ''}`;
+      if (headlineMentionsCoin(sym, coinId, blob)) rel.push(it);
+      else rest.push(it);
+    }
+    if (rel.length) return { lines: rel.slice(0, maxRel), usedFallback: false };
+    return { lines: rest.slice(0, maxFb), usedFallback: true };
+  }
+
+  function formatHeadlineBullet(it, idx) {
+    const sent = it.sentiment === 'positive' || it.sentiment === 'negative' ? it.sentiment : 'neutral';
+    const title = clipText(it.title || 'Untitled', 140);
+    const sum = it.summary ? clipText(it.summary, 160) : '';
+    const src = it.source ? ` — ${clipText(it.source, 40)}` : '';
+    const time = formatNewsTime(it.published);
+    const sentTag = sent.charAt(0).toUpperCase() + sent.slice(1);
+    const body = sum ? `${title} — ${sum}` : title;
+    return `${idx}. [${sentTag}] ${body}${src}${time ? ` (${time})` : ''}`;
+  }
+
+  function buildWhyMovePrompt(sym, coinId) {
+    const row = lastPricesPayload[coinId];
+    const ts = new Date().toLocaleString();
+    let priceBlock = `Snapshot time (browser): ${ts}\nCoinGecko id: ${coinId}\nTicker/label: ${sym}\n`;
+    if (!row || row.usd == null || Number.isNaN(Number(row.usd))) {
+      priceBlock +=
+        'Spot USD: (no live price in this session yet — explain typical drivers for this asset and note missing price.)\n';
+    } else {
+      priceBlock += `Spot USD (approx.): ${formatUsd(row.usd)}\n`;
+      const ch = row.usd_24h_change;
+      if (ch != null && !Number.isNaN(Number(ch))) {
+        priceBlock += `24h change (reported): ${ch >= 0 ? '+' : ''}${Number(ch).toFixed(2)}%\n`;
+      } else {
+        priceBlock += '24h change: not available in snapshot\n';
+      }
+    }
+
+    const items = Array.isArray(lastNewsItems) ? lastNewsItems : [];
+    const { lines, usedFallback } = pickHeadlinesForWhyMove(sym, coinId, items, 10, 8);
+    let newsBlock = '';
+    if (!lines.length) {
+      newsBlock =
+        'Recent RSS headlines: none loaded — say news was unavailable and reason only from macro/sentiment with caveats.';
+    } else {
+      const intro = usedFallback
+        ? `No headlines clearly matched this coin by text; sample from the latest app RSS bundle follows — flag when a story may not apply to ${sym}.`
+        : `Headlines below were auto-filtered when title/summary likely mentions ${sym} or parts of "${coinId}" — still verify relevance.`;
+      newsBlock = `${intro}\n\n${lines.map((it, i) => formatHeadlineBullet(it, i + 1)).join('\n')}`;
+    }
+
+    return (
+      `Why did ${sym} move? Give a concise, honest take (bullets ok): plausible drivers, what is uncertain, and whether headlines actually tie to this coin.\n\n` +
+      `${priceBlock}\n` +
+      `${newsBlock}\n\n` +
+      `Label speculation as speculation. Do not invent prices.`
+    );
+  }
+
+  async function sendWhyMoveForCoin(sym, coinId) {
+    const col = document.querySelector('.chat-column');
+    if (col) col.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    const prompt = buildWhyMovePrompt(sym, coinId);
+    await runChatPipeline({
+      displayUser: prompt,
+      storedUserContent: prompt,
+      apiUserContent: prompt,
+      clearAttachmentsOnSuccess: false,
+    });
+  }
+
   function setLiveFeedStatus(mode, titleHint) {
     liveFeedMode = mode;
     if (!liveFeedStatusEl) return;
@@ -2208,30 +2351,20 @@
     chatFileInput.addEventListener('change', () => handleFilesSelected(chatFileInput.files));
   }
 
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const text = input.value.trim();
-    if (!text && !pendingAttachments.length) return;
+  function setWhyMoveBusy(on) {
+    if (!pricesList) return;
+    pricesList.querySelectorAll('.why-move-btn').forEach((b) => {
+      b.disabled = Boolean(on);
+    });
+  }
 
-    const names = pendingAttachments.map((a) => a.name);
-    const storedUserContent = text
-      ? names.length
-        ? `${text}\n\n(Attached: ${names.join(', ')})`
-        : text
-      : names.length
-        ? `(Attached: ${names.join(', ')})`
-        : '';
-    const displayUser = text
-      ? names.length
-        ? `${text}\n\n📎 ${names.join(', ')}`
-        : text
-      : names.length
-        ? `📎 ${names.join(', ')}`
-        : '';
-    const snapshot = pendingAttachments.map((a) => ({ name: a.name, content: a.content }));
-    const apiUserContent = mergeAttachmentsForApi(text, snapshot);
-
-    input.value = '';
+  async function runChatPipeline({
+    displayUser,
+    storedUserContent,
+    apiUserContent,
+    clearAttachmentsOnSuccess = true,
+  }) {
+    if (!messagesEl || !form || !sendBtn) return;
     addMessage('user', displayUser);
     conversation.push({ role: 'user', content: storedUserContent });
     persistChatSessions();
@@ -2245,6 +2378,7 @@
     setTyping(botDiv, true);
     sendBtn.disabled = true;
     if (chatAttachBtn) chatAttachBtn.disabled = true;
+    setWhyMoveBusy(true);
 
     let structuredTrade = null;
     try {
@@ -2370,9 +2504,11 @@
         maybeCaptureStance(stored);
       }
       persistChatSessions();
-      pendingAttachments = [];
-      renderAttachChips();
-      setAttachStatus('');
+      if (clearAttachmentsOnSuccess) {
+        pendingAttachments = [];
+        renderAttachChips();
+        setAttachStatus('');
+      }
     } catch (err) {
       setTyping(botDiv, false);
       botDiv.classList.remove('streaming');
@@ -2383,8 +2519,53 @@
     } finally {
       sendBtn.disabled = false;
       if (chatAttachBtn) chatAttachBtn.disabled = false;
+      setWhyMoveBusy(false);
     }
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text && !pendingAttachments.length) return;
+
+    const names = pendingAttachments.map((a) => a.name);
+    const storedUserContent = text
+      ? names.length
+        ? `${text}\n\n(Attached: ${names.join(', ')})`
+        : text
+      : names.length
+        ? `(Attached: ${names.join(', ')})`
+        : '';
+    const displayUser = text
+      ? names.length
+        ? `${text}\n\n📎 ${names.join(', ')}`
+        : text
+      : names.length
+        ? `📎 ${names.join(', ')}`
+        : '';
+    const snapshot = pendingAttachments.map((a) => ({ name: a.name, content: a.content }));
+    const apiUserContent = mergeAttachmentsForApi(text, snapshot);
+
+    input.value = '';
+    await runChatPipeline({
+      displayUser,
+      storedUserContent,
+      apiUserContent,
+      clearAttachmentsOnSuccess: true,
+    });
   });
+
+  if (pricesList) {
+    pricesList.addEventListener('click', (e) => {
+      const btn = e.target.closest('.why-move-btn');
+      if (!btn || !pricesList.contains(btn)) return;
+      if (btn.disabled) return;
+      const sym = btn.getAttribute('data-coin-sym') || '';
+      const id = btn.getAttribute('data-coin-id') || '';
+      if (!sym || !id) return;
+      void sendWhyMoveForCoin(sym, id);
+    });
+  }
 
   input.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;

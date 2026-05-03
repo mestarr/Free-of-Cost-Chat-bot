@@ -785,6 +785,126 @@
     renderHistoryList();
   }
 
+  /** Max total URL length for share links (hash payload); avoids brittle browser limits. */
+  const SHARE_LINK_MAX_CHARS = 52000;
+
+  function bytesToBase64Url(bytes) {
+    let binary = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    const b64 = btoa(binary);
+    return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  function base64UrlToBytes(s) {
+    let b = String(s).replace(/-/g, '+').replace(/_/g, '/');
+    const pad = b.length % 4;
+    if (pad) b += '='.repeat(4 - pad);
+    const bin = atob(b);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  async function gzipUtf8ToBytes(text) {
+    const te = new TextEncoder();
+    const stream = new Blob([te.encode(text)]).stream().pipeThrough(new CompressionStream('gzip'));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+
+  async function gunzipBytesToUtf8(bytes) {
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return await new Response(stream).text();
+  }
+
+  async function encodeShareBundle(obj) {
+    const json = JSON.stringify(obj);
+    if (typeof CompressionStream !== 'undefined') {
+      try {
+        const gz = await gzipUtf8ToBytes(json);
+        return { mode: 'ccp1', payload: bytesToBase64Url(gz) };
+      } catch {
+        /* fall through */
+      }
+    }
+    return { mode: 'ccp0', payload: bytesToBase64Url(new TextEncoder().encode(json)) };
+  }
+
+  async function decodeShareBundle(mode, payloadB64) {
+    const raw = base64UrlToBytes(payloadB64);
+    if (mode === 'ccp1') return JSON.parse(await gunzipBytesToUtf8(raw));
+    return JSON.parse(new TextDecoder().decode(raw));
+  }
+
+  function validateShareBundle(data) {
+    if (!data || typeof data !== 'object' || data.v !== 1 || !Array.isArray(data.messages)) return null;
+    const msgs = [];
+    for (const m of data.messages) {
+      if (!m || typeof m !== 'object') continue;
+      const role = m.role;
+      if (role !== 'user' && role !== 'assistant') continue;
+      if (typeof m.content !== 'string') continue;
+      const t = m.content.trim();
+      if (!t) continue;
+      msgs.push({ role, content: t });
+    }
+    if (!msgs.length) return null;
+    const title =
+      typeof data.title === 'string' && data.title.trim() ? data.title.trim().slice(0, 120) : '';
+    return { title, messages: msgs };
+  }
+
+  function parseShareHash() {
+    const raw = location.hash.replace(/^#/, '');
+    if (!raw) return null;
+    const i = raw.indexOf('.');
+    if (i < 4) return null;
+    const mode = raw.slice(0, i);
+    if (mode !== 'ccp0' && mode !== 'ccp1') return null;
+    const payload = raw.slice(i + 1);
+    if (!payload) return null;
+    return { mode, payload };
+  }
+
+  function clearShareHashFromUrl() {
+    if (!location.hash) return;
+    const h = location.hash.replace(/^#/, '');
+    if (!h.startsWith('ccp0.') && !h.startsWith('ccp1.')) return;
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+
+  async function tryImportSharedFromHash() {
+    const parsed = parseShareHash();
+    if (!parsed) return;
+    let data;
+    try {
+      data = await decodeShareBundle(parsed.mode, parsed.payload);
+    } catch {
+      clearShareHashFromUrl();
+      return;
+    }
+    const bundle = validateShareBundle(data);
+    if (!bundle) {
+      clearShareHashFromUrl();
+      return;
+    }
+    const ok = window.confirm(
+      `Open shared chat (${bundle.messages.length} messages)? It will load as a new conversation.`
+    );
+    clearShareHashFromUrl();
+    if (!ok) return;
+    newChatSession();
+    const act = chatSessions.find((x) => x.id === activeSessionId);
+    if (!act) return;
+    act.messages = cleanMessageList(bundle.messages);
+    if (bundle.title) act.title = bundle.title;
+    act.updatedAt = Date.now();
+    conversation = act.messages;
+    persistChatSessions();
+  }
+
   function formatUsd(n) {
     if (n == null || Number.isNaN(n)) return '—';
     return new Intl.NumberFormat('en-US', {
@@ -2607,6 +2727,62 @@
     chatNewBtn.addEventListener('click', () => newChatSession());
   }
 
+  const chatShareLinkBtn = document.getElementById('chat-share-link');
+  if (chatShareLinkBtn) {
+    chatShareLinkBtn.addEventListener('click', async () => {
+      const act = chatSessions.find((x) => x.id === activeSessionId);
+      const msgs = act ? cleanMessageList(act.messages) : [];
+      if (!msgs.length) {
+        if (chatSaveStatus) {
+          chatSaveStatus.textContent = 'Nothing to share in this chat yet';
+          setTimeout(() => {
+            chatSaveStatus.textContent = '';
+          }, 3200);
+        }
+        return;
+      }
+      const bundle = { v: 1, title: (act.title || '').trim().slice(0, 120), messages: msgs };
+      let enc;
+      try {
+        enc = await encodeShareBundle(bundle);
+      } catch {
+        if (chatSaveStatus) {
+          chatSaveStatus.textContent = 'Could not build share link';
+          setTimeout(() => {
+            chatSaveStatus.textContent = '';
+          }, 3200);
+        }
+        return;
+      }
+      const url = `${location.origin}${location.pathname}${location.search}#${enc.mode}.${enc.payload}`;
+      if (url.length > SHARE_LINK_MAX_CHARS) {
+        if (chatSaveStatus) {
+          chatSaveStatus.textContent =
+            'Chat is too long for a URL link — try a shorter conversation or split threads.';
+          setTimeout(() => {
+            chatSaveStatus.textContent = '';
+          }, 4200);
+        }
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(url);
+        if (chatSaveStatus) {
+          chatSaveStatus.textContent = 'Share link copied (hash only — not sent to server)';
+          setTimeout(() => {
+            chatSaveStatus.textContent = '';
+          }, 3200);
+        }
+      } catch {
+        try {
+          window.prompt('Copy this link (conversation in URL hash, no upload):', url);
+        } catch {
+          /* ignore */
+        }
+      }
+    });
+  }
+
   if (chatHistoryToggle && chatHistoryPanel) {
     chatHistoryToggle.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -2715,10 +2891,14 @@
     }
   });
 
-  // Now that `addMessage` exists, restore and render any saved conversation.
-  renderConversation(conversation);
-  renderHistoryList();
-  updateSessionDeskUI();
+  // Restore saved chat, then apply optional share-hash import, then render.
+  async function bootChatUi() {
+    await tryImportSharedFromHash();
+    renderConversation(conversation);
+    renderHistoryList();
+    updateSessionDeskUI();
+  }
+  void bootChatUi();
 
   window.addEventListener('online', () => {
     sendLiveSubscribe();

@@ -21,7 +21,7 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="css/style.css?v=20260426-why-move" />
+  <link rel="stylesheet" href="css/style.css?v=20260426-sharelink" />
 </head>
 <body>
   <header>
@@ -211,6 +211,14 @@
         <span id="chat-save-status" class="chat-save-status" aria-live="polite"></span>
         <button type="button" id="chat-save" class="chat-toolbar-btn">Save</button>
         <button type="button" id="chat-new" class="chat-toolbar-btn">New chat</button>
+        <button
+          type="button"
+          id="chat-share-link"
+          class="chat-toolbar-btn"
+          title="Copy a permalink: conversation is gzip + base64 in the URL hash (no server upload)"
+        >
+          Share link
+        </button>
         <button type="button" id="chat-history-toggle" class="chat-toolbar-btn chat-toolbar-btn--accent" aria-expanded="false" aria-controls="chat-history-panel">
           Chats
         </button>
@@ -426,6 +434,6 @@
     </aside>
   </div>
 
-  <script src="js/app.js?v=20260426-why-move" defer></script>
+  <script src="js/app.js?v=20260426-sharelink" defer></script>
 </body>
 </html>

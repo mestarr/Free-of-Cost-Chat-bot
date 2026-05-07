@@ -21,7 +21,7 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="css/style.css?v=20260426-sharelink" />
+  <link rel="stylesheet" href="css/style.css?v=20260506-whales" />
 </head>
 <body>
   <header>
@@ -92,32 +92,59 @@
   </header>
 
   <div class="layout">
-    <aside class="side-column side-column--news" aria-label="Market, alerts, and news">
+    <div class="side-rail side-rail--left" id="side-rail-left">
+    <aside class="side-column side-column--news" id="side-panel-left" aria-label="Market, alerts, and news">
       <div class="left-column-tools">
-        <section class="macro-card macro-card--fng" aria-label="Crypto Fear and Greed Index">
-          <div class="macro-card-head">
+        <section
+          class="macro-card macro-card--fng side-widget"
+          data-widget-key="fng"
+          aria-label="Crypto Fear and Greed Index"
+        >
+          <div class="macro-card-head side-widget-head">
+            <button
+              type="button"
+              class="side-widget-toggle"
+              id="widget-toggle-fng"
+              aria-expanded="true"
+              aria-controls="widget-body-fng"
+              title="Collapse section"
+            >
+              <span class="side-widget-chevron" aria-hidden="true">▼</span>
+            </button>
             <h3>Fear &amp; Greed</h3>
             <span id="fng-updated" class="sub">Loading…</span>
           </div>
-          <div id="fng-error" class="hidden"></div>
-          <div id="fng-panel" class="fng-panel">
-            <div class="fng-value-row">
-              <span id="fng-value" class="fng-value" aria-live="polite">—</span>
-              <span id="fng-classification" class="fng-classification"></span>
-            </div>
-            <div class="fng-bar-wrap" role="presentation" aria-hidden="true">
-              <div class="fng-bar-track">
-                <div class="fng-bar-gradient"></div>
-                <div id="fng-marker" class="fng-marker" style="left: 0%"></div>
+          <div id="widget-body-fng" class="side-widget-body">
+            <div id="fng-error" class="hidden"></div>
+            <div id="fng-panel" class="fng-panel">
+              <div class="fng-value-row">
+                <span id="fng-value" class="fng-value" aria-live="polite">—</span>
+                <span id="fng-classification" class="fng-classification"></span>
               </div>
-              <div class="fng-bar-labels"><span>0</span><span>50</span><span>100</span></div>
+              <div class="fng-bar-wrap" role="presentation" aria-hidden="true">
+                <div class="fng-bar-track">
+                  <div class="fng-bar-gradient"></div>
+                  <div id="fng-marker" class="fng-marker" style="left: 0%"></div>
+                </div>
+                <div class="fng-bar-labels"><span>0</span><span>50</span><span>100</span></div>
+              </div>
+              <p id="fng-meta" class="fng-meta sub"></p>
+              <p class="fng-attrib sub">Crypto market sentiment · <a href="https://alternative.me/crypto/fear-and-greed-index/" target="_blank" rel="noopener noreferrer">Alternative.me</a></p>
             </div>
-            <p id="fng-meta" class="fng-meta sub"></p>
-            <p class="fng-attrib sub">Crypto market sentiment · <a href="https://alternative.me/crypto/fear-and-greed-index/" target="_blank" rel="noopener noreferrer">Alternative.me</a></p>
           </div>
         </section>
-        <section class="alerts-panel" aria-label="Price alerts">
-          <div class="portfolio-header-row">
+        <section class="alerts-panel side-widget" data-widget-key="alerts" aria-label="Price alerts">
+          <div class="portfolio-header-row side-widget-head">
+            <button
+              type="button"
+              class="side-widget-toggle"
+              id="widget-toggle-alerts"
+              aria-expanded="true"
+              aria-controls="widget-body-alerts"
+              title="Collapse section"
+            >
+              <span class="side-widget-chevron" aria-hidden="true">▼</span>
+            </button>
             <h2 class="portfolio-heading">Price alerts</h2>
             <div class="alerts-header-actions">
               <label class="alerts-sound-label">
@@ -127,6 +154,7 @@
               <button type="button" id="alerts-notify-btn" class="prices-edit-toggle">Enable notifications</button>
             </div>
           </div>
+          <div id="widget-body-alerts" class="side-widget-body">
           <p class="sub portfolio-privacy">Saved in this browser only. Alerts trigger on live price updates.</p>
           <div class="alerts-presets" role="group" aria-label="Quick add drop alerts">
             <span class="alerts-presets-label">Quick add</span>
@@ -180,31 +208,73 @@
             <button type="button" id="alerts-history-clear" class="alerts-history-clear" title="Clear history">Clear</button>
           </div>
           <div id="alerts-history" class="alerts-history" aria-live="polite"></div>
+          </div>
         </section>
       </div>
       <section class="news-panel" aria-label="Latest crypto news">
-        <div class="news-header">
-          <div class="news-header-top">
-            <div class="rss-icon" aria-hidden="true">
-              <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path d="M2 4a6 6 0 016 6H6a4 4 0 00-4-4V4zm0 4a2 2 0 012 2H4a2 2 0 00-2-2V8zm2 4a2 2 0 110-4 2 2 0 010 4z"/></svg>
+        <div class="news-widget side-widget side-widget--fill" data-widget-key="news">
+          <div class="news-header">
+            <div class="news-header-top">
+              <button
+                type="button"
+                class="side-widget-toggle"
+                id="widget-toggle-news"
+                aria-expanded="true"
+                aria-controls="widget-body-news"
+                title="Collapse section"
+              >
+                <span class="side-widget-chevron" aria-hidden="true">▼</span>
+              </button>
+              <div class="rss-icon" aria-hidden="true">
+                <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path d="M2 4a6 6 0 016 6H6a4 4 0 00-4-4V4zm0 4a2 2 0 012 2H4a2 2 0 00-2-2V8zm2 4a2 2 0 110-4 2 2 0 010 4z"/></svg>
+              </div>
+              <h2>Latest crypto &amp; business news</h2>
             </div>
-            <h2>Latest crypto &amp; business news</h2>
+            <span class="sub" id="news-updated">Loading…</span>
           </div>
-          <span class="sub" id="news-updated">Loading…</span>
+          <div id="widget-body-news" class="side-widget-body">
+            <div class="news-today">Today</div>
+            <div id="news-error" class="hidden"></div>
+            <div id="news-list"></div>
+          </div>
         </div>
-        <div class="news-today">Today</div>
-        <div id="news-error" class="hidden"></div>
-        <section class="macro-card macro-card--fed-left" aria-label="Federal Reserve news">
-          <div class="macro-card-head">
+        <section
+          class="macro-card macro-card--fed-left side-widget"
+          data-widget-key="fed"
+          aria-label="Federal Reserve news"
+        >
+          <div class="macro-card-head side-widget-head">
+            <button
+              type="button"
+              class="side-widget-toggle"
+              id="widget-toggle-fed"
+              aria-expanded="true"
+              aria-controls="widget-body-fed"
+              title="Collapse section"
+            >
+              <span class="side-widget-chevron" aria-hidden="true">▼</span>
+            </button>
             <h3>Federal Reserve news</h3>
             <span id="fed-updated" class="sub">Loading…</span>
           </div>
-          <div id="fed-error" class="hidden"></div>
-          <div id="fed-list"></div>
+          <div id="widget-body-fed" class="side-widget-body">
+            <div id="fed-error" class="hidden"></div>
+            <div id="fed-list"></div>
+          </div>
         </section>
-        <div id="news-list"></div>
       </section>
     </aside>
+    <button
+      type="button"
+      class="side-rail-toggle"
+      id="side-toggle-left"
+      aria-expanded="true"
+      aria-controls="side-panel-left"
+      title="Collapse left panel"
+    >
+      <span class="side-rail-toggle-icon" aria-hidden="true">◀</span>
+    </button>
+    </div>
 
     <div class="chat-column">
       <div class="chat-toolbar">
@@ -289,72 +359,149 @@
       </div>
     </div>
 
-    <aside class="side-column side-column--prices" aria-label="Live cryptocurrency prices">
-      <section class="prices-panel" aria-label="Live prices">
-        <div class="prices-header">
-          <div class="prices-header-row">
-            <h2>Live prices</h2>
-            <button type="button" id="prices-edit-toggle" class="prices-edit-toggle" aria-expanded="false">
-              Edit list
-            </button>
-          </div>
-          <div class="prices-live-row">
-            <span class="sub" id="prices-updated">Loading…</span>
-            <span id="live-feed-status" class="live-feed-status" role="status" aria-live="polite"></span>
-          </div>
-        </div>
-        <div class="macro-top" aria-label="Macro indicators">
-          <section class="macro-card" aria-label="Commodities prices">
-            <div class="macro-card-head">
+    <div class="side-rail side-rail--right" id="side-rail-right">
+    <button
+      type="button"
+      class="side-rail-toggle"
+      id="side-toggle-right"
+      aria-expanded="true"
+      aria-controls="side-panel-right"
+      title="Collapse right panel"
+    >
+      <span class="side-rail-toggle-icon" aria-hidden="true">▶</span>
+    </button>
+    <aside class="side-column side-column--prices" id="side-panel-right" aria-label="Live cryptocurrency prices">
+      <section class="prices-panel" aria-label="Market prices and portfolio">
+        <div class="prices-panel-macro-slot prices-panel-macro-slot--commodities">
+          <section class="macro-card side-widget" data-widget-key="commodities" aria-label="Commodities prices">
+            <div class="macro-card-head side-widget-head">
+              <button
+                type="button"
+                class="side-widget-toggle"
+                id="widget-toggle-commodities"
+                aria-expanded="true"
+                aria-controls="widget-body-commodities"
+                title="Collapse section"
+              >
+                <span class="side-widget-chevron" aria-hidden="true">▼</span>
+              </button>
               <h3>Commodities prices</h3>
               <span id="oil-updated" class="sub">Loading…</span>
             </div>
-            <div id="oil-error" class="hidden"></div>
-            <div id="oil-list"></div>
+            <div id="widget-body-commodities" class="side-widget-body">
+              <div id="oil-error" class="hidden"></div>
+              <div id="oil-list"></div>
+            </div>
           </section>
         </div>
-        <div id="prices-editor" class="prices-editor hidden" aria-hidden="true">
-          <p class="prices-editor-hint">
-            Reorder, remove, or add coins (CoinGecko IDs). Saved in this browser only.
-          </p>
-          <div id="prices-editor-rows" class="prices-editor-rows"></div>
-          <div class="prices-editor-add">
-            <label class="visually-hidden" for="prices-preset-select">Add from presets</label>
-            <select id="prices-preset-select" class="prices-select">
-              <option value="">Add from list…</option>
-            </select>
-            <button type="button" id="prices-add-preset" class="prices-btn">Add</button>
+
+        <div class="side-widget side-widget--fill" data-widget-key="prices">
+          <div class="prices-header">
+            <div class="prices-header-row">
+              <button
+                type="button"
+                class="side-widget-toggle"
+                id="widget-toggle-prices"
+                aria-expanded="true"
+                aria-controls="widget-body-prices"
+                title="Collapse section"
+              >
+                <span class="side-widget-chevron" aria-hidden="true">▼</span>
+              </button>
+              <h2>Coin prices</h2>
+              <button type="button" id="prices-edit-toggle" class="prices-edit-toggle" aria-expanded="false">
+                Edit list
+              </button>
+            </div>
+            <div class="prices-live-row">
+              <span class="sub" id="prices-updated">Loading…</span>
+              <span id="live-feed-status" class="live-feed-status" role="status" aria-live="polite"></span>
+            </div>
           </div>
-          <div class="prices-editor-custom">
-            <label class="visually-hidden" for="prices-custom-id">CoinGecko id</label>
-            <input
-              type="text"
-              id="prices-custom-id"
-              class="prices-input"
-              placeholder="Custom id (e.g. chainlink)"
-              maxlength="64"
-              autocomplete="off"
-            />
-            <label class="visually-hidden" for="prices-custom-sym">Short label</label>
-            <input
-              type="text"
-              id="prices-custom-sym"
-              class="prices-input prices-input--sym"
-              placeholder="Label (e.g. LINK)"
-              maxlength="12"
-              autocomplete="off"
-            />
-            <button type="button" id="prices-add-custom" class="prices-btn">Add</button>
+          <div id="widget-body-prices" class="side-widget-body side-widget-body--prices">
+            <div id="prices-editor" class="prices-editor hidden" aria-hidden="true">
+              <p class="prices-editor-hint">
+                Reorder, remove, or add coins (CoinGecko IDs). Saved in this browser only.
+              </p>
+              <div id="prices-editor-rows" class="prices-editor-rows"></div>
+              <div class="prices-editor-add">
+                <label class="visually-hidden" for="prices-preset-select">Add from presets</label>
+                <select id="prices-preset-select" class="prices-select">
+                  <option value="">Add from list…</option>
+                </select>
+                <button type="button" id="prices-add-preset" class="prices-btn">Add</button>
+              </div>
+              <div class="prices-editor-custom">
+                <label class="visually-hidden" for="prices-custom-id">CoinGecko id</label>
+                <input
+                  type="text"
+                  id="prices-custom-id"
+                  class="prices-input"
+                  placeholder="Custom id (e.g. chainlink)"
+                  maxlength="64"
+                  autocomplete="off"
+                />
+                <label class="visually-hidden" for="prices-custom-sym">Short label</label>
+                <input
+                  type="text"
+                  id="prices-custom-sym"
+                  class="prices-input prices-input--sym"
+                  placeholder="Label (e.g. LINK)"
+                  maxlength="12"
+                  autocomplete="off"
+                />
+                <button type="button" id="prices-add-custom" class="prices-btn">Add</button>
+              </div>
+              <button type="button" id="prices-reset-default" class="prices-reset-btn">Reset to default</button>
+            </div>
+            <div id="prices-error" class="hidden"></div>
+            <div id="prices-list"></div>
           </div>
-          <button type="button" id="prices-reset-default" class="prices-reset-btn">Reset to default</button>
         </div>
-        <section class="portfolio-panel" aria-label="Your portfolio">
-          <div class="portfolio-header-row">
+
+        <div class="prices-panel-macro-slot">
+          <section class="macro-card macro-card--onchain side-widget" data-widget-key="onchain" aria-label="On-chain and exchange flow data">
+            <div class="macro-card-head side-widget-head">
+              <button
+                type="button"
+                class="side-widget-toggle"
+                id="widget-toggle-onchain"
+                aria-expanded="true"
+                aria-controls="widget-body-onchain"
+                title="Collapse section"
+              >
+                <span class="side-widget-chevron" aria-hidden="true">▼</span>
+              </button>
+              <h3>On-chain &amp; flows</h3>
+              <span id="onchain-updated" class="sub">Loading…</span>
+            </div>
+            <div id="widget-body-onchain" class="side-widget-body">
+              <p id="onchain-disclaimer" class="onchain-disclaimer sub"></p>
+              <div id="onchain-error" class="hidden"></div>
+              <div id="onchain-list" class="onchain-list"></div>
+              <div id="onchain-whales" class="onchain-whales"></div>
+            </div>
+          </section>
+        </div>
+
+        <section class="portfolio-panel side-widget" data-widget-key="portfolio" aria-label="Your portfolio">
+          <div class="portfolio-header-row side-widget-head">
+            <button
+              type="button"
+              class="side-widget-toggle"
+              id="widget-toggle-portfolio"
+              aria-expanded="true"
+              aria-controls="widget-body-portfolio"
+              title="Collapse section"
+            >
+              <span class="side-widget-chevron" aria-hidden="true">▼</span>
+            </button>
             <h2 class="portfolio-heading">Portfolio</h2>
             <button type="button" id="portfolio-edit-toggle" class="prices-edit-toggle" aria-expanded="false">
               Edit
             </button>
           </div>
+          <div id="widget-body-portfolio" class="side-widget-body">
           <p class="sub portfolio-privacy">Saved in this browser only. Add avg buy price (USD) to see P/L.</p>
           <div id="portfolio-summary" class="portfolio-summary"></div>
           <div id="portfolio-display" class="portfolio-display"></div>
@@ -427,13 +574,77 @@
             </div>
             <button type="button" id="portfolio-clear" class="prices-reset-btn">Clear portfolio</button>
           </div>
+          </div>
         </section>
-        <div id="prices-error" class="hidden"></div>
-        <div id="prices-list"></div>
       </section>
     </aside>
+    </div>
+    <script>
+      (function () {
+        try {
+          if (localStorage.getItem('cryptochatpal_sidebar_left_collapsed') === '1') {
+            var el = document.getElementById('side-rail-left');
+            if (el) el.classList.add('is-collapsed');
+          }
+          if (localStorage.getItem('cryptochatpal_sidebar_right_collapsed') === '1') {
+            var el = document.getElementById('side-rail-right');
+            if (el) el.classList.add('is-collapsed');
+          }
+          function syncFoldableWidget(w) {
+            var btn = w.querySelector('.side-widget-toggle');
+            if (!btn) return;
+            var c = w.classList.contains('is-collapsed');
+            btn.setAttribute('aria-expanded', c ? 'false' : 'true');
+            btn.title = c ? 'Expand section' : 'Collapse section';
+            var ch = btn.querySelector('.side-widget-chevron');
+            if (ch) ch.textContent = c ? '▶' : '▼';
+            var bid = btn.getAttribute('aria-controls');
+            if (bid) {
+              var b = document.getElementById(bid);
+              if (b) b.setAttribute('aria-hidden', c ? 'true' : 'false');
+            }
+          }
+          var foldKeys = ['fng', 'alerts', 'news', 'fed', 'commodities', 'prices', 'onchain', 'portfolio'];
+          foldKeys.forEach(function (k) {
+            try {
+              if (localStorage.getItem('cryptochatpal_widget_' + k) === '1') {
+                var w = document.querySelector('.side-widget[data-widget-key="' + k + '"]');
+                if (w) w.classList.add('is-collapsed');
+              }
+            } catch (e2) {}
+          });
+          document.querySelectorAll('.side-widget[data-widget-key]').forEach(syncFoldableWidget);
+          function sync(btnId, railId, expandLabel, collapseLabel, iconOpen, iconShut) {
+            var rail = document.getElementById(railId);
+            var btn = document.getElementById(btnId);
+            if (!rail || !btn) return;
+            var c = rail.classList.contains('is-collapsed');
+            btn.setAttribute('aria-expanded', c ? 'false' : 'true');
+            btn.title = c ? expandLabel : collapseLabel;
+            var icon = btn.querySelector('.side-rail-toggle-icon');
+            if (icon) icon.textContent = c ? iconOpen : iconShut;
+          }
+          sync(
+            'side-toggle-left',
+            'side-rail-left',
+            'Expand left panel (news, alerts, Fear & Greed)',
+            'Collapse left panel',
+            '▶',
+            '◀'
+          );
+          sync(
+            'side-toggle-right',
+            'side-rail-right',
+            'Expand right panel (commodities, coin prices, on-chain)',
+            'Collapse right panel',
+            '◀',
+            '▶'
+          );
+        } catch (e) {}
+      })();
+    </script>
   </div>
 
-  <script src="js/app.js?v=20260426-sharelink" defer></script>
+  <script src="js/app.js?v=20260506-whales" defer></script>
 </body>
 </html>

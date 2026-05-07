@@ -25,8 +25,8 @@ from .admin_routes import router as admin_router
 from .fng import fetch_fear_greed_json
 from .llm_tools import GROQ_TOOLS, execute_tool, normalize_trade_card
 from .news import fetch_news_snapshot_for_llm, get_fed_news_api_payload, get_news_api_payload, llm_news_grounding_note
-from .onchain import fetch_onchain_markets_json
 from .observability import RequestLoggingMiddleware, counters_snapshot
+from .onchain import fetch_onchain_markets_json
 from .prices import (
     default_prices_grounding_note,
     fetch_live_price_snapshot,

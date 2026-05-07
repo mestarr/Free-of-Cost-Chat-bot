@@ -11,6 +11,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from .accounts import verify_api_key
 from .fng import fetch_fear_greed_json
 from .news import get_fed_news_api_payload, get_news_api_payload
+from .onchain import fetch_onchain_markets_json
 from .prices import fetch_oil_prices_json, fetch_prices_json
 
 router = APIRouter()
@@ -72,7 +73,10 @@ async def websocket_live(websocket: WebSocket):
                     oil = await fetch_oil_prices_json()
                     fed = await get_fed_news_api_payload(limit=8)
                     fng = await fetch_fear_greed_json()
-                    await websocket.send_json({"type": "macro", "oil": oil, "fed": fed, "fng": fng})
+                    onchain = await fetch_onchain_markets_json(ids_csv=ids_csv or None)
+                    await websocket.send_json(
+                        {"type": "macro", "oil": oil, "fed": fed, "fng": fng, "onchain": onchain}
+                    )
                 except Exception:
                     pass
     except WebSocketDisconnect:

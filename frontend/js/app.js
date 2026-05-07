@@ -37,6 +37,11 @@
   const oilList = document.getElementById('oil-list');
   const oilUpdated = document.getElementById('oil-updated');
   const oilError = document.getElementById('oil-error');
+  const onchainList = document.getElementById('onchain-list');
+  const onchainUpdated = document.getElementById('onchain-updated');
+  const onchainError = document.getElementById('onchain-error');
+  const onchainDisclaimer = document.getElementById('onchain-disclaimer');
+  const onchainWhales = document.getElementById('onchain-whales');
   const fedList = document.getElementById('fed-list');
   const fedUpdated = document.getElementById('fed-updated');
   const fedError = document.getElementById('fed-error');
@@ -48,6 +53,9 @@
   const PRICE_ALERTS_SOUND_KEY = 'cryptochatpal_alerts_sound';
   const PRICE_ALERT_LOG_KEY = 'cryptochatpal_price_alert_log';
   const THEME_KEY = 'cryptochatpal_theme';
+  const SIDEBAR_LEFT_COLLAPSED_KEY = 'cryptochatpal_sidebar_left_collapsed';
+  const SIDEBAR_RIGHT_COLLAPSED_KEY = 'cryptochatpal_sidebar_right_collapsed';
+  const WIDGET_COLLAPSE_PREFIX = 'cryptochatpal_widget_';
   /** Optional SaaS API key (set via localStorage when server uses CCP_AUTH_MODE=required). */
   const CCP_API_KEY_STORAGE = 'ccp_api_key';
 
@@ -93,6 +101,99 @@
   if (themeLightBtn) themeLightBtn.addEventListener('click', () => applyTheme('light'));
   if (themeDarkBtn) themeDarkBtn.addEventListener('click', () => applyTheme('dark'));
   syncThemeButtons();
+
+  function syncSideRailUI(btnId, railId, expandLabel, collapseLabel, iconWhenCollapsed, iconWhenExpanded) {
+    const rail = document.getElementById(railId);
+    const btn = document.getElementById(btnId);
+    if (!rail || !btn) return;
+    const collapsed = rail.classList.contains('is-collapsed');
+    btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    btn.title = collapsed ? expandLabel : collapseLabel;
+    const icon = btn.querySelector('.side-rail-toggle-icon');
+    if (icon) icon.textContent = collapsed ? iconWhenCollapsed : iconWhenExpanded;
+  }
+
+  function initSideRailToggles() {
+    const left = {
+      btnId: 'side-toggle-left',
+      railId: 'side-rail-left',
+      key: SIDEBAR_LEFT_COLLAPSED_KEY,
+      expandLabel: 'Expand left panel (news, alerts, Fear & Greed)',
+      collapseLabel: 'Collapse left panel',
+      iconCollapsed: '▶',
+      iconExpanded: '◀',
+    };
+    const right = {
+      btnId: 'side-toggle-right',
+      railId: 'side-rail-right',
+      key: SIDEBAR_RIGHT_COLLAPSED_KEY,
+      expandLabel: 'Expand right panel (commodities, coin prices, on-chain)',
+      collapseLabel: 'Collapse right panel',
+      iconCollapsed: '◀',
+      iconExpanded: '▶',
+    };
+    [left, right].forEach((cfg) => {
+      const rail = document.getElementById(cfg.railId);
+      const btn = document.getElementById(cfg.btnId);
+      if (!rail || !btn) return;
+      btn.addEventListener('click', () => {
+        rail.classList.toggle('is-collapsed');
+        try {
+          localStorage.setItem(cfg.key, rail.classList.contains('is-collapsed') ? '1' : '0');
+        } catch (e) {}
+        syncSideRailUI(
+          cfg.btnId,
+          cfg.railId,
+          cfg.expandLabel,
+          cfg.collapseLabel,
+          cfg.iconCollapsed,
+          cfg.iconExpanded
+        );
+      });
+      syncSideRailUI(
+        cfg.btnId,
+        cfg.railId,
+        cfg.expandLabel,
+        cfg.collapseLabel,
+        cfg.iconCollapsed,
+        cfg.iconExpanded
+      );
+    });
+  }
+  initSideRailToggles();
+
+  function syncCollapsibleWidget(widget) {
+    const toggle = widget.querySelector('.side-widget-toggle');
+    if (!toggle) return;
+    const collapsed = widget.classList.contains('is-collapsed');
+    toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    toggle.title = collapsed ? 'Expand section' : 'Collapse section';
+    const ch = toggle.querySelector('.side-widget-chevron');
+    if (ch) ch.textContent = collapsed ? '▶' : '▼';
+    const bid = toggle.getAttribute('aria-controls');
+    if (bid) {
+      const body = document.getElementById(bid);
+      if (body) body.setAttribute('aria-hidden', collapsed ? 'true' : 'false');
+    }
+  }
+
+  function initCollapsibleWidgets() {
+    document.querySelectorAll('.side-widget[data-widget-key]').forEach((widget) => {
+      const key = widget.dataset.widgetKey;
+      if (!key) return;
+      const toggle = widget.querySelector('.side-widget-toggle');
+      if (!toggle) return;
+      toggle.addEventListener('click', () => {
+        widget.classList.toggle('is-collapsed');
+        try {
+          localStorage.setItem(WIDGET_COLLAPSE_PREFIX + key, widget.classList.contains('is-collapsed') ? '1' : '0');
+        } catch (e) {}
+        syncCollapsibleWidget(widget);
+      });
+      syncCollapsibleWidget(widget);
+    });
+  }
+  initCollapsibleWidgets();
 
   const MAX_PRICE_ROWS = 30;
 
@@ -1617,6 +1718,7 @@
     renderPrices(lastPricesPayload);
     loadPrices();
     loadSparklines();
+    loadOnchain();
     sendLiveSubscribe();
   }
 
@@ -2066,6 +2168,145 @@
     }
   }
 
+  function formatUsdOi(n) {
+    if (n == null || Number.isNaN(Number(n))) return '—';
+    const x = Number(n);
+    if (x >= 1e12) return `$${(x / 1e12).toFixed(2)}T`;
+    if (x >= 1e9) return `$${(x / 1e9).toFixed(2)}B`;
+    if (x >= 1e6) return `$${(x / 1e6).toFixed(2)}M`;
+    if (x >= 1e3) return `$${(x / 1e3).toFixed(1)}K`;
+    return `$${x.toFixed(0)}`;
+  }
+
+  function formatFundingInterval(pct) {
+    if (pct == null || Number.isNaN(Number(pct))) return '—';
+    const p = Number(pct);
+    const s = p >= 0 ? '+' : '';
+    return `${s}${p.toFixed(4)}% / 8h`;
+  }
+
+  function renderOnchain(data) {
+    if (!onchainList || !onchainUpdated) return;
+    if (onchainError) onchainError.classList.add('hidden');
+    if (onchainDisclaimer) onchainDisclaimer.textContent = data.disclaimer || '';
+
+    const items = data.items || [];
+    onchainList.innerHTML = '';
+    if (!items.length) {
+      const p = document.createElement('div');
+      p.className = 'news-snippet';
+      p.textContent = 'No Binance futures mapping for the current watchlist ids.';
+      onchainList.appendChild(p);
+      onchainUpdated.textContent = '';
+    } else {
+      for (const it of items) {
+        const row = document.createElement('div');
+        row.className = 'onchain-row';
+        const fund = formatFundingInterval(it.funding_pct_per_interval);
+        const nextF = it.next_funding_label || '—';
+        const oi = formatUsdOi(it.open_interest_usd_est);
+        const taker = it.taker_buy_sell_ratio_5m;
+        const takerS = taker == null || Number.isNaN(Number(taker)) ? '—' : Number(taker).toFixed(3);
+        const lsr = it.long_short_account_ratio_5m;
+        const lsrS = lsr == null || Number.isNaN(Number(lsr)) ? '—' : Number(lsr).toFixed(3);
+        row.innerHTML = `
+          <div class="onchain-row-head">
+            <span class="sym">${escapeHtml(it.sym || '')}</span>
+            <span class="onchain-binance sub">${escapeHtml(it.binance_symbol || '')}</span>
+          </div>
+          <div class="onchain-metrics">
+            <div>Funding <strong>${escapeHtml(fund)}</strong></div>
+            <div>Next fund <strong>${escapeHtml(nextF)}</strong></div>
+            <div>OI (est. USD) <strong>${escapeHtml(oi)}</strong></div>
+            <div>Taker buy/sell 5m <strong>${escapeHtml(takerS)}</strong></div>
+            <div>Acct long/short 5m <strong>${escapeHtml(lsrS)}</strong></div>
+            <div>Mark <strong>${escapeHtml(it.mark_price != null ? formatUsd(it.mark_price) : '—')}</strong></div>
+          </div>`;
+        onchainList.appendChild(row);
+      }
+      const stamp = formatUtcLabel(data.fetched_at);
+      onchainUpdated.textContent = stamp ? `Updated · ${stamp}` : 'Updated';
+    }
+
+    if (onchainWhales) {
+      const w = data.whales || {};
+      const txs = w.items || [];
+      const hasNote = w.note != null && String(w.note).trim() !== '';
+      if (!w.configured && txs.length === 0 && !hasNote) {
+        onchainWhales.innerHTML = '';
+        onchainWhales.classList.add('hidden');
+        onchainWhales.setAttribute('aria-hidden', 'true');
+      } else {
+        onchainWhales.classList.remove('hidden');
+        onchainWhales.removeAttribute('aria-hidden');
+        onchainWhales.innerHTML = '';
+        const title = document.createElement('div');
+        title.className = 'onchain-whales-title';
+        title.textContent = w.configured ? 'Whale-scale transfers (Whale Alert)' : 'Whale-scale transfers';
+        onchainWhales.appendChild(title);
+        if (!txs.length) {
+          const note = document.createElement('div');
+          note.className = 'news-snippet';
+          note.textContent = w.note || (w.configured ? 'No recent large transfers in the feed.' : '');
+          if (note.textContent) onchainWhales.appendChild(note);
+        } else {
+          for (const tx of txs) {
+            const el = document.createElement('div');
+            el.className = 'whale-row';
+            const usd =
+              tx.amount_usd != null && !Number.isNaN(Number(tx.amount_usd))
+                ? formatUsdOi(tx.amount_usd)
+                : '—';
+            const href = tx.explorer && /^https?:\/\//i.test(tx.explorer) ? tx.explorer : '';
+            const blk = escapeHtml(tx.blockchain || '');
+            const sym = escapeHtml(tx.symbol || '');
+            const t = escapeHtml(tx.timestamp_label || '');
+            const hshort = escapeHtml(tx.hash || '');
+            if (href) {
+              el.innerHTML = `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${sym}</a> · ${blk} · <strong>${escapeHtml(
+                usd
+              )}</strong> · ${t}<br/><span class="sub">${hshort}</span>`;
+            } else {
+              el.innerHTML = `${sym} · ${blk} · <strong>${escapeHtml(usd)}</strong> · ${t}<br/><span class="sub">${hshort}</span>`;
+            }
+            onchainWhales.appendChild(el);
+          }
+          if (w.note) {
+            const nn = document.createElement('div');
+            nn.className = 'sub';
+            nn.style.marginTop = '0.35rem';
+            nn.textContent = w.note;
+            onchainWhales.appendChild(nn);
+          }
+        }
+      }
+    }
+  }
+
+  async function loadOnchain() {
+    if (!onchainList) return;
+    try {
+      const q = buildCombinedIdsQuery();
+      const res = await fetch('/api/markets/onchain?ids=' + encodeURIComponent(q), {
+        headers: ccpApiAuthHeaders(),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const d = data.detail;
+        const msg =
+          typeof d === 'string' ? d : (d && JSON.stringify(d)) || res.statusText || 'Failed';
+        throw new Error(msg);
+      }
+      renderOnchain(data);
+    } catch (e) {
+      if (onchainError) {
+        onchainError.textContent = 'Could not load on-chain / flow data.';
+        onchainError.classList.remove('hidden');
+      }
+      if (onchainUpdated) onchainUpdated.textContent = '';
+    }
+  }
+
   function renderFedNews(data) {
     if (!fedList || !fedUpdated || !fedError) return;
     fedError.classList.add('hidden');
@@ -2114,9 +2355,11 @@
   }
 
   loadOil();
+  loadOnchain();
   loadFng();
   loadFedNews();
   setInterval(loadOil, 300000);
+  setInterval(loadOnchain, 120000);
   setInterval(loadFng, 300000);
   setInterval(loadFedNews, 300000);
 
@@ -2416,6 +2659,7 @@
         if (msg.oil) renderOil(msg.oil);
         if (msg.fed) renderFedNews(msg.fed);
         if (msg.fng) renderFng(msg.fng);
+        if (msg.onchain) renderOnchain(msg.onchain);
       }
     };
     liveWs.onerror = () => {};

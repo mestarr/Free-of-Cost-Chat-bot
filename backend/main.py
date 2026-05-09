@@ -229,12 +229,42 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
+    strategy_mode: str | None = Field(default=None, max_length=32)
 
 
 class ChatResponse(BaseModel):
     message: str
     model: str
     trade: dict | None = None
+
+
+STRATEGY_MODE_PROMPTS = {
+    "day_trader": (
+        "Strategy mode preset: Day Trader. Bias answers toward short timeframes, entries/exits, invalidation, "
+        "liquidity, momentum, and risk per trade. Be explicit that this is tactical, not long-term conviction."
+    ),
+    "hodler": (
+        "Strategy mode preset: HODLer. Bias answers toward long-term accumulation, cycle context, fundamentals, "
+        "drawdown tolerance, and avoiding over-trading. Emphasize multi-month to multi-year thinking."
+    ),
+    "risk_averse": (
+        "Strategy mode preset: Risk-averse. Bias answers toward capital preservation, smaller sizing, confirmation, "
+        "clear invalidation, stablecoins/cash as valid choices, and avoiding forced trades."
+    ),
+    "degenerate": (
+        "Strategy mode preset: Degenerate. Keep the tone energetic, but do not encourage reckless behavior. "
+        "If discussing high-risk trades, demand strict sizing, stops, invalidation, and clearly label downside."
+    ),
+    "educator": (
+        "Strategy mode preset: Educator. Bias answers toward teaching: define terms, explain reasoning step by step, "
+        "show assumptions, and prefer learning value over a direct trade call when useful."
+    ),
+}
+
+
+def _strategy_mode_prompt(mode: str | None) -> str:
+    key = (mode or "day_trader").strip().lower().replace("-", "_")
+    return STRATEGY_MODE_PROMPTS.get(key, STRATEGY_MODE_PROMPTS["day_trader"])
 
 
 @asynccontextmanager
@@ -376,6 +406,7 @@ def _build_messages(
     utc_now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     out: list[dict] = [
         {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": _strategy_mode_prompt(req.strategy_mode)},
         {
             "role": "system",
             "content": f"Context anchor: server time is {utc_now}. Use this for recency; injected prices/news may be slightly older than this instant.",

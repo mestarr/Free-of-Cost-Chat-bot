@@ -21,7 +21,7 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="css/style.css?v=20260506-whales" />
+  <link rel="stylesheet" href="css/style.css?v=20260509-strategy-mode" />
 </head>
 <body>
   <header>
@@ -279,6 +279,16 @@
     <div class="chat-column">
       <div class="chat-toolbar">
         <span id="chat-save-status" class="chat-save-status" aria-live="polite"></span>
+        <label class="strategy-mode-control" for="strategy-mode">
+          <span>Strategy</span>
+          <select id="strategy-mode" class="strategy-mode-select">
+            <option value="day_trader">Day Trader</option>
+            <option value="hodler">HODLer</option>
+            <option value="risk_averse">Risk-averse</option>
+            <option value="degenerate">Degenerate</option>
+            <option value="educator">Educator</option>
+          </select>
+        </label>
         <button type="button" id="chat-save" class="chat-toolbar-btn">Save</button>
         <button type="button" id="chat-new" class="chat-toolbar-btn">New chat</button>
         <button
@@ -645,6 +655,6 @@
     </script>
   </div>
 
-  <script src="js/app.js?v=20260506-whales" defer></script>
+  <script src="js/app.js?v=20260509-strategy-mode" defer></script>
 </body>
 </html>

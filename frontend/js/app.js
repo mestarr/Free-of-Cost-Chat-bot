@@ -7,6 +7,7 @@
   const chatAttachChips = document.getElementById('chat-attach-chips');
   const chatAttachBtn = document.getElementById('chat-attach');
   const chatAttachStatus = document.getElementById('chat-attach-status');
+  const strategyModeSelect = document.getElementById('strategy-mode');
   const pricesList = document.getElementById('prices-list');
   const pricesUpdated = document.getElementById('prices-updated');
   const pricesError = document.getElementById('prices-error');
@@ -56,6 +57,7 @@
   const SIDEBAR_LEFT_COLLAPSED_KEY = 'cryptochatpal_sidebar_left_collapsed';
   const SIDEBAR_RIGHT_COLLAPSED_KEY = 'cryptochatpal_sidebar_right_collapsed';
   const WIDGET_COLLAPSE_PREFIX = 'cryptochatpal_widget_';
+  const STRATEGY_MODE_KEY = 'cryptochatpal_strategy_mode';
   /** Optional SaaS API key (set via localStorage when server uses CCP_AUTH_MODE=required). */
   const CCP_API_KEY_STORAGE = 'ccp_api_key';
 
@@ -101,6 +103,26 @@
   if (themeLightBtn) themeLightBtn.addEventListener('click', () => applyTheme('light'));
   if (themeDarkBtn) themeDarkBtn.addEventListener('click', () => applyTheme('dark'));
   syncThemeButtons();
+
+  function getStrategyMode() {
+    return strategyModeSelect && strategyModeSelect.value ? strategyModeSelect.value : 'day_trader';
+  }
+
+  function initStrategyMode() {
+    if (!strategyModeSelect) return;
+    try {
+      const saved = localStorage.getItem(STRATEGY_MODE_KEY);
+      if (saved && Array.from(strategyModeSelect.options).some((opt) => opt.value === saved)) {
+        strategyModeSelect.value = saved;
+      }
+    } catch (e) {}
+    strategyModeSelect.addEventListener('change', () => {
+      try {
+        localStorage.setItem(STRATEGY_MODE_KEY, getStrategyMode());
+      } catch (e) {}
+    });
+  }
+  initStrategyMode();
 
   function syncSideRailUI(btnId, railId, expandLabel, collapseLabel, iconWhenCollapsed, iconWhenExpanded) {
     const rail = document.getElementById(railId);
@@ -2753,7 +2775,7 @@
           Accept: 'application/x-ndjson',
           ...ccpApiAuthHeaders(),
         },
-        body: JSON.stringify({ messages: messagesForApi }),
+        body: JSON.stringify({ messages: messagesForApi, strategy_mode: getStrategyMode() }),
       });
 
       if (!res.ok) {

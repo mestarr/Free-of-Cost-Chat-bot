@@ -50,6 +50,7 @@ if not logging.root.handlers:
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 # Smaller = faster; larger instruct models (e.g. llama-3.3-70b-versatile on Groq) trade speed for depth.
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "llama-3.2-11b-vision-preview")
 # Automatic fallback when primary model exhausts its daily token quota (TPD).
 # Must be a model with its own quota bucket; 8b has the most generous free-tier TPD.
 _GROQ_FALLBACK_MODEL = "llama-3.1-8b-instant"
@@ -227,9 +228,16 @@ class ChatMessage(BaseModel):
     content: str = Field(max_length=200_000)
 
 
+class ChatImage(BaseModel):
+    name: str = Field(max_length=180)
+    media_type: str = Field(max_length=40)
+    data_url: str = Field(max_length=5_500_000)
+
+
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     strategy_mode: str | None = Field(default=None, max_length=32)
+    images: list[ChatImage] = Field(default_factory=list, max_length=3)
 
 
 class ChatResponse(BaseModel):
@@ -443,6 +451,53 @@ def _build_messages(
     return out
 
 
+def _safe_chat_images(images: list[ChatImage]) -> list[ChatImage]:
+    out: list[ChatImage] = []
+    for img in images[:3]:
+        mt = (img.media_type or "").strip().lower()
+        if mt not in {"image/png", "image/jpeg", "image/webp"}:
+            continue
+        prefix = f"data:{mt};base64,"
+        if not img.data_url.startswith(prefix):
+            continue
+        out.append(img)
+    return out
+
+
+def _with_vision_images(messages: list[dict], images: list[ChatImage]) -> list[dict]:
+    safe_images = _safe_chat_images(images)
+    if not safe_images:
+        return messages
+    out = [dict(m) for m in messages]
+    vision_hint = {
+        "role": "system",
+        "content": (
+            "Chart pattern vision: the user may attach TradingView or chart screenshots. "
+            "Analyze visible trend, support/resistance, pattern, volume if visible, invalidation, "
+            "and bullish/bearish scenarios. Do not claim exact prices or indicators unless readable."
+        ),
+    }
+    insert_at = 0
+    while insert_at < len(out) and out[insert_at].get("role") == "system":
+        insert_at += 1
+    out.insert(insert_at, vision_hint)
+    for i in range(len(out) - 1, -1, -1):
+        if out[i].get("role") != "user":
+            continue
+        text = str(out[i].get("content") or "").strip()
+        if not text:
+            text = (
+                "Analyze the attached TradingView/chart screenshot for chart patterns, trend, "
+                "support/resistance, likely scenarios, and invalidation."
+            )
+        content: list[dict] = [{"type": "text", "text": text}]
+        for img in safe_images:
+            content.append({"type": "image_url", "image_url": {"url": img.data_url}})
+        out[i]["content"] = content
+        return out
+    return out
+
+
 def _apply_groq_history_cap(messages: list[dict]) -> list[dict]:
     """Keep all leading system blocks; drop oldest user/assistant/tool tail items over cap (saves TPM)."""
     split = 0
@@ -642,6 +697,21 @@ async def _groq_post_chat_completion(client: httpx.AsyncClient, payload: dict) -
         await asyncio.sleep(wait)
         backoff = min(backoff * 1.75, 45.0)
     return last  # type: ignore[return-value]
+
+
+async def _groq_complete_vision(client: httpx.AsyncClient, messages: list[dict]) -> tuple[str, str]:
+    payload: dict = {
+        "model": GROQ_VISION_MODEL,
+        "messages": messages,
+        "temperature": LLM_TEMPERATURE,
+        "max_tokens": min(LLM_MAX_TOKENS, 1400),
+    }
+    r = await _groq_post_chat_completion(client, payload)
+    r.raise_for_status()
+    data = r.json()
+    model_out = data.get("model") or GROQ_VISION_MODEL
+    content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+    return content.strip() or "I could not read the chart screenshot clearly.", model_out
 
 
 async def _groq_complete_multistep(client: httpx.AsyncClient, messages: list[dict]) -> tuple[str, str, dict | None]:
@@ -869,10 +939,18 @@ async def chat(req: ChatRequest):
         llm_news_grounding_note(),
         omit_rss_block=omit_rss,
     )
+    vision_images = _safe_chat_images(req.images)
+    if vision_images:
+        if not USE_GROQ:
+            raise HTTPException(status_code=400, detail="Chart image analysis requires GROQ_API_KEY.")
+        messages = _with_vision_images(messages, vision_images)
 
     if USE_GROQ:
         async with httpx.AsyncClient(timeout=120.0) as client:
             try:
+                if vision_images:
+                    content, model_used = await _groq_complete_vision(client, messages)
+                    return ChatResponse(message=content, model=model_used)
                 content, model_used, trade = await _groq_complete_multistep(client, messages)
                 return ChatResponse(message=content, model=model_used, trade=trade)
             except httpx.HTTPStatusError as e:
@@ -911,13 +989,20 @@ def _ndjson_line(obj: dict) -> bytes:
     return (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
 
 
-async def _stream_chat_ndjson(messages: list[dict]) -> AsyncIterator[bytes]:
+async def _stream_chat_ndjson(messages: list[dict], vision: bool = False) -> AsyncIterator[bytes]:
     """Yield NDJSON lines: {"c":"chunk"} text deltas, then {"done":true,"model":...} or {"error":"..."}."""
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
+            if vision and not USE_GROQ:
+                yield _ndjson_line({"error": "Chart image analysis requires GROQ_API_KEY."})
+                return
             if USE_GROQ:
                 try:
-                    content, model_used, trade = await _groq_complete_multistep(client, messages)
+                    if vision:
+                        content, model_used = await _groq_complete_vision(client, messages)
+                        trade = None
+                    else:
+                        content, model_used, trade = await _groq_complete_multistep(client, messages)
                 except httpx.HTTPStatusError as e:
                     if e.response.status_code == 401:
                         detail = "Invalid GROQ_API_KEY. Get a free key at https://console.groq.com"
@@ -992,9 +1077,12 @@ async def chat_stream(req: ChatRequest):
         llm_news_grounding_note(),
         omit_rss_block=omit_rss,
     )
+    vision_images = _safe_chat_images(req.images)
+    if vision_images:
+        messages = _with_vision_images(messages, vision_images)
 
     return StreamingResponse(
-        _stream_chat_ndjson(messages),
+        _stream_chat_ndjson(messages, vision=bool(vision_images)),
         media_type="application/x-ndjson",
         headers={
             "Cache-Control": "no-cache",

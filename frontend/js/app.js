@@ -221,7 +221,9 @@
 
   const ATTACH_MAX_FILES = 5;
   const ATTACH_MAX_BYTES = 256 * 1024;
+  const ATTACH_MAX_IMAGE_BYTES = 3 * 1024 * 1024;
   const ATTACH_NAME_RE = /\.(md|txt|csv|json|log)$/i;
+  const ATTACH_IMAGE_RE = /\.(png|jpe?g|webp)$/i;
 
   let pendingAttachments = [];
 
@@ -229,6 +231,11 @@
     if (ATTACH_NAME_RE.test(file.name)) return true;
     const t = (file.type || '').toLowerCase();
     return t.startsWith('text/') || t === 'application/json';
+  }
+
+  function isAllowedImageFile(file) {
+    const t = (file.type || '').toLowerCase();
+    return ATTACH_IMAGE_RE.test(file.name) && ['image/png', 'image/jpeg', 'image/webp'].includes(t);
   }
 
   function uniqueAttachName(name) {
@@ -255,17 +262,33 @@
     });
   }
 
+  function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result || ''));
+      r.onerror = () => reject(new Error('read failed'));
+      r.readAsDataURL(file);
+    });
+  }
+
   function mergeAttachmentsForApi(text, attachments) {
     const parts = [];
     const t = text.trim();
     if (t) parts.push(t);
-    if (attachments.length) {
+    const textAttachments = attachments.filter((a) => a.kind === 'text');
+    if (textAttachments.length) {
       parts.push('--- Attached files ---');
-      for (const a of attachments) {
+      for (const a of textAttachments) {
         parts.push(`### ${a.name}\n${a.content}`);
       }
     }
     return parts.join('\n\n');
+  }
+
+  function imageAttachmentsForApi(attachments) {
+    return attachments
+      .filter((a) => a.kind === 'image')
+      .map((a) => ({ name: a.name, media_type: a.mediaType, data_url: a.dataUrl }));
   }
 
   function setAttachStatus(msg) {
@@ -286,7 +309,7 @@
       const wrap = document.createElement('span');
       wrap.className = 'chat-attach-chip';
       const label = document.createElement('span');
-      label.textContent = a.name;
+      label.textContent = a.kind === 'image' ? `Chart: ${a.name}` : a.name;
       const rm = document.createElement('button');
       rm.type = 'button';
       rm.setAttribute('aria-label', `Remove ${a.name}`);
@@ -313,17 +336,32 @@
         errors.push(`At most ${ATTACH_MAX_FILES} files.`);
         break;
       }
-      if (!isAllowedTextFile(file)) {
-        errors.push(`Skipped (not a supported text file): ${file.name}`);
+      const isImage = isAllowedImageFile(file);
+      if (!isAllowedTextFile(file) && !isImage) {
+        errors.push(`Skipped (supported: text files or PNG/JPG/WebP screenshots): ${file.name}`);
         continue;
       }
-      if (file.size > ATTACH_MAX_BYTES) {
+      if (isImage && file.size > ATTACH_MAX_IMAGE_BYTES) {
+        errors.push(`Image too large (max ${ATTACH_MAX_IMAGE_BYTES / 1024 / 1024} MB): ${file.name}`);
+        continue;
+      }
+      if (!isImage && file.size > ATTACH_MAX_BYTES) {
         errors.push(`Too large (max ${ATTACH_MAX_BYTES / 1024} KB): ${file.name}`);
         continue;
       }
       try {
-        const content = await readFileAsText(file);
-        pendingAttachments.push({ name: uniqueAttachName(file.name), content });
+        if (isImage) {
+          const dataUrl = await readFileAsDataUrl(file);
+          pendingAttachments.push({
+            kind: 'image',
+            name: uniqueAttachName(file.name),
+            mediaType: file.type,
+            dataUrl,
+          });
+        } else {
+          const content = await readFileAsText(file);
+          pendingAttachments.push({ kind: 'text', name: uniqueAttachName(file.name), content });
+        }
       } catch {
         errors.push(`Could not read: ${file.name}`);
       }
@@ -2748,6 +2786,7 @@
     displayUser,
     storedUserContent,
     apiUserContent,
+    images = [],
     clearAttachmentsOnSuccess = true,
   }) {
     if (!messagesEl || !form || !sendBtn) return;
@@ -2775,7 +2814,11 @@
           Accept: 'application/x-ndjson',
           ...ccpApiAuthHeaders(),
         },
-        body: JSON.stringify({ messages: messagesForApi, strategy_mode: getStrategyMode() }),
+        body: JSON.stringify({
+          messages: messagesForApi,
+          strategy_mode: getStrategyMode(),
+          images,
+        }),
       });
 
       if (!res.ok) {
@@ -2929,14 +2972,20 @@
       : names.length
         ? `📎 ${names.join(', ')}`
         : '';
-    const snapshot = pendingAttachments.map((a) => ({ name: a.name, content: a.content }));
-    const apiUserContent = mergeAttachmentsForApi(text, snapshot);
+    const snapshot = pendingAttachments.map((a) => ({ ...a }));
+    const apiUserContent =
+      mergeAttachmentsForApi(text, snapshot) ||
+      (snapshot.some((a) => a.kind === 'image')
+        ? 'Analyze the attached TradingView/chart screenshot for chart patterns, trend, support/resistance, likely scenarios, and invalidation.'
+        : '');
+    const images = imageAttachmentsForApi(snapshot);
 
     input.value = '';
     await runChatPipeline({
       displayUser,
       storedUserContent,
       apiUserContent,
+      images,
       clearAttachmentsOnSuccess: true,
     });
   });

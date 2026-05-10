@@ -21,7 +21,7 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="css/style.css?v=20260509-strategy-mode" />
+  <link rel="stylesheet" href="css/style.css?v=20260510-chart-vision" />
 </head>
 <body>
   <header>
@@ -345,7 +345,7 @@
             id="chat-file-input"
             class="visually-hidden"
             multiple
-            accept=".md,.txt,.csv,.json,.log,text/plain,text/markdown,application/json"
+            accept=".md,.txt,.csv,.json,.log,.png,.jpg,.jpeg,.webp,text/plain,text/markdown,application/json,image/png,image/jpeg,image/webp"
             aria-hidden="true"
             tabindex="-1"
           />
@@ -360,7 +360,7 @@
               title="Enter to send · Shift+Enter for a new line"
               rows="1"
             ></textarea>
-            <button type="button" id="chat-attach" class="chat-attach-btn" title="Attach text files (e.g. README.md)">
+            <button type="button" id="chat-attach" class="chat-attach-btn" title="Attach text files or TradingView chart screenshots">
               Attach
             </button>
             <button type="submit" id="send">Send</button>
@@ -655,6 +655,6 @@
     </script>
   </div>
 
-  <script src="js/app.js?v=20260509-strategy-mode" defer></script>
+  <script src="js/app.js?v=20260510-chart-vision" defer></script>
 </body>
 </html>

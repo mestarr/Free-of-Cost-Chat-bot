@@ -150,6 +150,34 @@ button {
   text-align: left;
 }
 
+.strategy-mode-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.strategy-mode-select {
+  font-family: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  max-width: 150px;
+  padding: 0.38rem 1.9rem 0.38rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.strategy-mode-select:hover,
+.strategy-mode-select:focus {
+  border-color: rgba(0, 212, 170, 0.45);
+  outline: none;
+}
+
 .chat-toolbar-btn {
   font-family: inherit;
   font-size: 0.72rem;

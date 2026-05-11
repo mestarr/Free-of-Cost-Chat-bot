@@ -300,6 +300,110 @@ button {
   margin-bottom: 0.55rem;
 }
 
+.session-diary-block {
+  border-top: 1px solid var(--border);
+  padding-top: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+
+.session-diary-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 0.3rem;
+}
+
+.session-alignment-score {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--accent);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.session-diary-readout {
+  margin: 0 0 0.4rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.session-diary-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.session-diary-list:empty::after {
+  content: 'Captured trade calls will ask for a 24h review here.';
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.session-diary-item {
+  padding: 0.45rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.session-diary-item.is-due {
+  border-color: rgba(0, 212, 170, 0.5);
+  box-shadow: 0 0 0 1px rgba(0, 212, 170, 0.08);
+}
+
+.session-diary-item.is-reviewed {
+  opacity: 0.78;
+}
+
+.session-diary-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.2rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  color: var(--muted);
+}
+
+.session-diary-view {
+  color: var(--text);
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+.session-diary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.session-diary-actions button {
+  font-family: inherit;
+  font-size: 0.65rem;
+  padding: 0.22rem 0.42rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.session-diary-actions button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .session-stance-block {
   border-top: 1px solid var(--border);
   padding-top: 0.5rem;

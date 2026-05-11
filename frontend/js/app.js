@@ -572,6 +572,7 @@
 
   const STANCE_LEDGER_KEY = 'cryptochatpal_stance_ledger';
   const MAX_STANCE_ENTRIES = 24;
+  const STANCE_FOLLOWUP_MS = 24 * 60 * 60 * 1000;
 
   function loadStanceLedger() {
     try {
@@ -581,6 +582,15 @@
       if (!Array.isArray(arr)) return [];
       return arr
         .filter((x) => x && typeof x === 'object' && typeof x.t === 'number')
+        .map((x) => ({
+          id: typeof x.id === 'string' ? x.id : `stance-${x.t}-${Math.random().toString(36).slice(2, 8)}`,
+          t: x.t,
+          followUpAt: typeof x.followUpAt === 'number' ? x.followUpAt : x.t + STANCE_FOLLOWUP_MS,
+          view: x.view || '',
+          confidence: x.confidence || '',
+          score: x.score || '',
+          reflection: x.reflection && typeof x.reflection === 'object' ? x.reflection : null,
+        }))
         .slice(0, MAX_STANCE_ENTRIES);
     } catch {
       return [];
@@ -596,6 +606,19 @@
   }
 
   let stanceLedger = loadStanceLedger();
+
+  function newStanceEntry(data) {
+    const t = Date.now();
+    return {
+      id: `stance-${t}-${Math.random().toString(36).slice(2, 8)}`,
+      t,
+      followUpAt: t + STANCE_FOLLOWUP_MS,
+      view: data.view || '',
+      confidence: data.confidence || '',
+      score: data.score || '',
+      reflection: null,
+    };
+  }
 
   function parseStanceFromReply(text) {
     if (!text || typeof text !== 'string') return null;
@@ -613,12 +636,11 @@
   function maybeCaptureStance(reply) {
     const parsed = parseStanceFromReply(reply);
     if (!parsed) return;
-    stanceLedger.unshift({
-      t: Date.now(),
+    stanceLedger.unshift(newStanceEntry({
       view: parsed.view,
       confidence: parsed.confidence,
       score: parsed.score,
-    });
+    }));
     stanceLedger = stanceLedger.slice(0, MAX_STANCE_ENTRIES);
     saveStanceLedger();
     updateSessionDeskUI();
@@ -628,12 +650,11 @@
     if (!trade || typeof trade !== 'object') return;
     const view = trade.view != null ? String(trade.view).trim().slice(0, 120) : '';
     if (!view && trade.confidence == null && trade.score_total == null) return;
-    stanceLedger.unshift({
-      t: Date.now(),
+    stanceLedger.unshift(newStanceEntry({
       view,
       confidence: trade.confidence != null ? String(trade.confidence) : '',
       score: trade.score_total != null ? String(trade.score_total) : '',
-    });
+    }));
     stanceLedger = stanceLedger.slice(0, MAX_STANCE_ENTRIES);
     saveStanceLedger();
     updateSessionDeskUI();
@@ -720,17 +741,115 @@
     return { value, mood, detail };
   }
 
+  function computeAlignment() {
+    const reviewed = stanceLedger.filter((e) => e.reflection && typeof e.reflection.score === 'number');
+    if (!reviewed.length) return { count: 0, score: null };
+    const sum = reviewed.reduce((acc, e) => acc + Number(e.reflection.score || 0), 0);
+    return { count: reviewed.length, score: Math.round(sum / reviewed.length) };
+  }
+
+  function reflectionLabel(value) {
+    if (value === 'aligned') return { label: 'Aligned', score: 100 };
+    if (value === 'mixed') return { label: 'Mixed', score: 50 };
+    if (value === 'missed') return { label: 'Missed', score: 0 };
+    return { label: 'Unreviewed', score: null };
+  }
+
+  function dueLabel(ts) {
+    const delta = Number(ts || 0) - Date.now();
+    const absH = Math.max(1, Math.round(Math.abs(delta) / (60 * 60 * 1000)));
+    return delta <= 0 ? `Due ${absH}h ago` : `Due in ${absH}h`;
+  }
+
+  function setStanceReflection(id, value) {
+    const outcome = reflectionLabel(value);
+    if (outcome.score == null) return;
+    const ent = stanceLedger.find((e) => e.id === id);
+    if (!ent) return;
+    ent.reflection = {
+      outcome: value,
+      label: outcome.label,
+      score: outcome.score,
+      t: Date.now(),
+    };
+    saveStanceLedger();
+    updateSessionDeskUI();
+  }
+
+  function renderTradingDiary(list, readout, scoreEl) {
+    if (!list || !readout || !scoreEl) return;
+    const now = Date.now();
+    const due = stanceLedger.filter((e) => !e.reflection && Number(e.followUpAt || 0) <= now);
+    const pending = stanceLedger.filter((e) => !e.reflection && Number(e.followUpAt || 0) > now);
+    const reviewed = stanceLedger.filter((e) => e.reflection);
+    const align = computeAlignment();
+    scoreEl.textContent = align.score == null ? 'Alignment —' : `Alignment ${align.score}/100`;
+    if (due.length) {
+      readout.textContent = `${due.length} review${due.length === 1 ? '' : 's'} due. Ask: did the setup, timing, and risk plan match what actually happened?`;
+    } else if (pending.length) {
+      readout.textContent = `Next 24h reflection: ${dueLabel(pending[pending.length - 1].followUpAt)}.`;
+    } else if (reviewed.length) {
+      readout.textContent = `${reviewed.length} reflection${reviewed.length === 1 ? '' : 's'} logged.`;
+    } else {
+      readout.textContent = 'No reflections yet. New trade calls will appear here after 24h.';
+    }
+
+    list.innerHTML = '';
+    const rows = [...due, ...pending.slice(-3), ...reviewed.slice(0, 3)].slice(0, 8);
+    for (const e of rows) {
+      const li = document.createElement('li');
+      li.className = `session-diary-item${e.reflection ? ' is-reviewed' : ''}${Number(e.followUpAt || 0) <= now && !e.reflection ? ' is-due' : ''}`;
+      const status = e.reflection ? e.reflection.label : dueLabel(e.followUpAt);
+      li.innerHTML = `
+        <div class="session-diary-meta">
+          <time datetime="${new Date(e.t).toISOString()}">${new Date(e.t).toLocaleString()}</time>
+          <span>${escapeHtml(status)}</span>
+        </div>
+        <div class="session-diary-view">${escapeHtml(e.view || '(stance captured)')}</div>
+        <div class="session-diary-actions">
+          <button type="button" data-diary-reflect="${escapeHtml(e.id)}">Ask follow-up</button>
+          <button type="button" data-diary-outcome="aligned" data-diary-id="${escapeHtml(e.id)}">Aligned</button>
+          <button type="button" data-diary-outcome="mixed" data-diary-id="${escapeHtml(e.id)}">Mixed</button>
+          <button type="button" data-diary-outcome="missed" data-diary-id="${escapeHtml(e.id)}">Missed</button>
+        </div>`;
+      list.appendChild(li);
+    }
+  }
+
+  async function askDiaryFollowUp(id) {
+    const ent = stanceLedger.find((e) => e.id === id);
+    if (!ent) return;
+    const prompt =
+      `24h trading diary reflection.\n\n` +
+      `Original stance time: ${new Date(ent.t).toLocaleString()}\n` +
+      `Original view: ${ent.view || '(not captured)'}\n` +
+      `Confidence: ${ent.confidence || 'n/a'}\n` +
+      `Score: ${ent.score || 'n/a'}\n\n` +
+      `Help me review alignment: what should I compare now, what would count as aligned vs missed, and what lesson should I log? Keep it practical.`;
+    await runChatPipeline({
+      displayUser: prompt,
+      storedUserContent: prompt,
+      apiUserContent: prompt,
+      clearAttachmentsOnSuccess: false,
+    });
+  }
+
   function updateSessionDeskUI() {
     const pulseBar = document.getElementById('session-pulse-bar');
     const pulseVal = document.getElementById('session-pulse-value');
     const pulseRead = document.getElementById('session-pulse-readout');
     const list = document.getElementById('session-stance-list');
+    const diaryList = document.getElementById('session-diary-list');
+    const diaryReadout = document.getElementById('session-diary-readout');
+    const alignmentScore = document.getElementById('session-alignment-score');
     if (!pulseBar || !pulseVal || !pulseRead) return;
 
     const p = computeSessionPulse();
     pulseBar.style.width = `${p.value}%`;
     pulseVal.textContent = String(p.value);
     pulseRead.textContent = `${p.mood} — ${p.detail}`;
+
+    renderTradingDiary(diaryList, diaryReadout, alignmentScore);
 
     if (!list) return;
     list.innerHTML = '';
@@ -3137,6 +3256,7 @@
         kind: 'session_desk_snapshot',
         exportedAt: new Date().toISOString(),
         marketPulse: p,
+        alignment: computeAlignment(),
         stanceLog: stanceLedger,
       },
       null,
@@ -3185,6 +3305,20 @@
       stanceLedger = [];
       saveStanceLedger();
       updateSessionDeskUI();
+    });
+  }
+
+  if (sessionDeskPanel) {
+    sessionDeskPanel.addEventListener('click', (e) => {
+      const outcomeBtn = e.target.closest('[data-diary-outcome]');
+      if (outcomeBtn && sessionDeskPanel.contains(outcomeBtn)) {
+        setStanceReflection(outcomeBtn.getAttribute('data-diary-id'), outcomeBtn.getAttribute('data-diary-outcome'));
+        return;
+      }
+      const reflectBtn = e.target.closest('[data-diary-reflect]');
+      if (reflectBtn && sessionDeskPanel.contains(reflectBtn)) {
+        void askDiaryFollowUp(reflectBtn.getAttribute('data-diary-reflect'));
+      }
     });
   }
 

@@ -21,7 +21,7 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="css/style.css?v=20260510-chart-vision" />
+  <link rel="stylesheet" href="css/style.css?v=20260511-trading-diary" />
 </head>
 <body>
   <header>
@@ -309,7 +309,7 @@
       <div id="session-desk-panel" class="session-desk hidden" aria-hidden="true">
         <div class="session-desk-inner">
           <p class="session-desk-lead">
-            <strong>Session desk</strong> blends your <em>watchlist volatility</em> with <em>headline tone</em> into one live pulse, and keeps a <em>stance log</em> when the assistant answers in trade format (View / Confidence / Score).
+            <strong>Session desk</strong> blends your <em>watchlist volatility</em> with <em>headline tone</em> into one live pulse, keeps a <em>stance log</em>, and schedules 24h trade reflections.
           </p>
           <div class="session-pulse" aria-live="polite">
             <div class="session-pulse-top">
@@ -324,6 +324,14 @@
           <div class="session-desk-actions">
             <button type="button" id="session-desk-export" class="chat-toolbar-btn">Export snapshot</button>
             <button type="button" id="session-desk-clear-ledger" class="chat-toolbar-btn">Clear stance log</button>
+          </div>
+          <div class="session-diary-block">
+            <div class="session-diary-head">
+              <span>Trading diary</span>
+              <span id="session-alignment-score" class="session-alignment-score">Alignment —</span>
+            </div>
+            <p id="session-diary-readout" class="session-diary-readout">No reflections yet.</p>
+            <ul id="session-diary-list" class="session-diary-list"></ul>
           </div>
           <div class="session-stance-block">
             <div class="session-stance-head">Stance log</div>
@@ -655,6 +663,6 @@
     </script>
   </div>
 
-  <script src="js/app.js?v=20260510-chart-vision" defer></script>
+  <script src="js/app.js?v=20260511-trading-diary" defer></script>
 </body>
 </html>

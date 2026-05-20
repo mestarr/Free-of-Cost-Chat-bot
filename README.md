@@ -37,11 +37,17 @@ A **free**, crypto-focused AI chatbot with a web UI, **live USD spot prices** (C
 3. Install and run (from the project root):
 
    ```powershell
-   python -m venv venv
+   py -3.14 -m venv venv
    .\venv\Scripts\activate
    python -m pip install -r requirements.txt
-   python -m uvicorn backend.main:app --reload
+   python -m uvicorn backend.main:app --reload --reload-dir backend --reload-dir frontend
    ```
+
+   Do **not** use bare `--reload` without `--reload-dir` — StatReload watches the whole project including `venv/` and can loop forever or block port 8000.
+
+   On Windows, prefer **`py -3.14 -m venv`** (python.org) over MSYS2’s `python` — mingw builds often lack wheels for `pydantic-core` / `watchfiles` and fail without Rust.
+
+   If imports fail (`BaseMetadata`, `anyio.to_thread`), the venv may be corrupted — purge pip cache and reinstall: `python -m pip cache purge` then `python -m pip install --no-cache-dir -r requirements.txt`.
 
 4. Open **http://127.0.0.1:8000**. You should see the chat and the **Live prices** + **Latest news** column on the right (stacked below the chat on narrow screens).
 

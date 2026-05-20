@@ -48,12 +48,16 @@ if not logging.root.handlers:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
-# Smaller = faster; larger instruct models (e.g. llama-3.3-70b-versatile on Groq) trade speed for depth.
+# Legacy single-model override when GROQ_MODEL_ROUTING=0.
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+# Auto-routing targets (defaults: 8b definitions/Q&A, 70b trade decisions, vision for screenshots).
+GROQ_FAST_MODEL = os.getenv("GROQ_FAST_MODEL", "llama-3.1-8b-instant")
+GROQ_TRADE_MODEL = os.getenv("GROQ_TRADE_MODEL", "llama-3.3-70b-versatile")
 GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "llama-3.2-11b-vision-preview")
-# Automatic fallback when primary model exhausts its daily token quota (TPD).
-# Must be a model with its own quota bucket; 8b has the most generous free-tier TPD.
-_GROQ_FALLBACK_MODEL = "llama-3.1-8b-instant"
+_groq_routing_raw = os.getenv("GROQ_MODEL_ROUTING", "1").strip().lower()
+GROQ_MODEL_ROUTING = _groq_routing_raw not in ("0", "false", "no", "off")
+# TPD fallback always uses the fast bucket.
+_GROQ_FALLBACK_MODEL = GROQ_FAST_MODEL
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 USE_GROQ = bool(GROQ_API_KEY)
@@ -244,6 +248,7 @@ class ChatResponse(BaseModel):
     message: str
     model: str
     trade: dict | None = None
+    route: str | None = None
 
 
 STRATEGY_MODE_PROMPTS = {
@@ -280,6 +285,12 @@ async def lifespan(app: FastAPI):
     init_accounts_db()
     if USE_GROQ:
         print("Using Groq (free cloud). No Ollama needed.")
+        if GROQ_MODEL_ROUTING:
+            print(
+                f"Groq auto-routing: fast={GROQ_FAST_MODEL}, trade={GROQ_TRADE_MODEL}, vision={GROQ_VISION_MODEL}"
+            )
+        else:
+            print(f"Groq single model (routing off): {GROQ_MODEL}")
         if LLM_TOOLS_ENABLED:
             print("Groq tool calling enabled (set LLM_TOOLS=0 in .env to disable).")
     else:
@@ -400,6 +411,107 @@ def _groq_short_format_turn(user_text: str) -> bool:
     if len(compact) <= 28 and compact in ("yes", "no", "ok", "why", "please", "thanks", "answer", "answer me"):
         return True
     return False
+
+
+_TRADE_INTENT_PHRASES = (
+    "should i buy",
+    "should i sell",
+    "should i hold",
+    "do i need to buy",
+    "do i need to sell",
+    "when to buy",
+    "when to sell",
+    "when should i buy",
+    "when should i sell",
+    "buy now",
+    "sell now",
+    "hold or sell",
+    "buy or sell",
+    "going long",
+    "going short",
+    "take profit",
+    "stop loss",
+    "stop-loss",
+    "invalidation",
+    "position size",
+    "position sizing",
+    "what should i do",
+    "trade setup",
+    "entry plan",
+    "exit plan",
+    "risk reward",
+    "risk/reward",
+    "price target",
+    "target price",
+    "scorecard",
+    "emit_trade",
+    "long or short",
+    "open a position",
+    "close my position",
+    "add to position",
+    "trim position",
+)
+
+_EDUCATION_INTENT_PHRASES = (
+    "what is ",
+    "what's ",
+    "whats ",
+    "define ",
+    "meaning of ",
+    "how does ",
+    "how do ",
+    "difference between",
+    "pros and cons",
+    "eli5",
+    "in simple terms",
+    "for beginners",
+    "how it works",
+    "explain what ",
+)
+
+
+def _is_trade_intent(user_text: str) -> bool:
+    """Buy/sell/hold, sizing, and trade-plan questions → 70b + tools."""
+    u = (user_text or "").strip().lower()
+    if not u:
+        return False
+    if any(p in u for p in _TRADE_INTENT_PHRASES):
+        return True
+    if re.search(r"\b(buy|sell|hold|long|short)\b", u) and re.search(
+        r"\b(btc|eth|sol|xrp|ada|bnb|doge|dot|crypto|coin|token|portfolio)\b", u
+    ):
+        return True
+    if re.search(r"\b(buy|sell|hold)\s+(btc|eth|sol|xrp|ada|bnb|doge|dot)\b", u):
+        return True
+    return False
+
+
+def _is_education_intent(user_text: str) -> bool:
+    """Definitions and how-it-works → fast 8b."""
+    u = (user_text or "").strip().lower()
+    if not u or _is_trade_intent(u):
+        return False
+    if any(p in u for p in _EDUCATION_INTENT_PHRASES):
+        return True
+    return u.startswith(("what is ", "explain ", "define "))
+
+
+def resolve_groq_route(user_text: str, *, has_images: bool = False) -> tuple[str, str]:
+    """
+    Pick Groq model bucket for this turn.
+    Returns (route_key, model_id): vision | trade | fast.
+    """
+    if has_images:
+        return "vision", GROQ_VISION_MODEL
+    if not GROQ_MODEL_ROUTING:
+        return "default", GROQ_MODEL
+    if _groq_short_format_turn(user_text):
+        return "fast", GROQ_FAST_MODEL
+    if _is_trade_intent(user_text):
+        return "trade", GROQ_TRADE_MODEL
+    if _is_education_intent(user_text):
+        return "fast", GROQ_FAST_MODEL
+    return "fast", GROQ_FAST_MODEL
 
 
 def _build_messages(
@@ -714,15 +826,20 @@ async def _groq_complete_vision(client: httpx.AsyncClient, messages: list[dict])
     return content.strip() or "I could not read the chart screenshot clearly.", model_out
 
 
-async def _groq_complete_multistep(client: httpx.AsyncClient, messages: list[dict]) -> tuple[str, str, dict | None]:
+async def _groq_complete_multistep(
+    client: httpx.AsyncClient,
+    messages: list[dict],
+    *,
+    primary_model: str,
+) -> tuple[str, str, dict | None]:
     """Groq chat with optional tool loop; returns (assistant text, model id, optional trade dict from emit_trade_analysis)."""
     msgs: list[dict] = _compress_assistant_turns_for_groq(_apply_groq_history_cap([dict(x) for x in messages]))
     low = _groq_short_format_turn(_groq_last_user_text(msgs))
     trade_card: dict | None = None
-    model_out = GROQ_MODEL
+    model_out = primary_model
     max_rounds = 1 if (low or not LLM_TOOLS_ENABLED) else LLM_MAX_TOOL_ROUNDS
 
-    active_model = GROQ_MODEL
+    active_model = primary_model
     for _ in range(max_rounds):
         msgs = _trim_messages_for_groq(msgs)
         payload: dict = {
@@ -940,6 +1057,7 @@ async def chat(req: ChatRequest):
         omit_rss_block=omit_rss,
     )
     vision_images = _safe_chat_images(req.images)
+    route_key, route_model = resolve_groq_route(lu, has_images=bool(vision_images))
     if vision_images:
         if not USE_GROQ:
             raise HTTPException(status_code=400, detail="Chart image analysis requires GROQ_API_KEY.")
@@ -950,9 +1068,11 @@ async def chat(req: ChatRequest):
             try:
                 if vision_images:
                     content, model_used = await _groq_complete_vision(client, messages)
-                    return ChatResponse(message=content, model=model_used)
-                content, model_used, trade = await _groq_complete_multistep(client, messages)
-                return ChatResponse(message=content, model=model_used, trade=trade)
+                    return ChatResponse(message=content, model=model_used, route=route_key)
+                content, model_used, trade = await _groq_complete_multistep(
+                    client, messages, primary_model=route_model
+                )
+                return ChatResponse(message=content, model=model_used, trade=trade, route=route_key)
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 401:
                     detail = "Invalid GROQ_API_KEY. Get a free key at https://console.groq.com"
@@ -989,7 +1109,13 @@ def _ndjson_line(obj: dict) -> bytes:
     return (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
 
 
-async def _stream_chat_ndjson(messages: list[dict], vision: bool = False) -> AsyncIterator[bytes]:
+async def _stream_chat_ndjson(
+    messages: list[dict],
+    *,
+    vision: bool = False,
+    route_key: str = "fast",
+    route_model: str = GROQ_FAST_MODEL,
+) -> AsyncIterator[bytes]:
     """Yield NDJSON lines: {"c":"chunk"} text deltas, then {"done":true,"model":...} or {"error":"..."}."""
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -1002,7 +1128,9 @@ async def _stream_chat_ndjson(messages: list[dict], vision: bool = False) -> Asy
                         content, model_used = await _groq_complete_vision(client, messages)
                         trade = None
                     else:
-                        content, model_used, trade = await _groq_complete_multistep(client, messages)
+                        content, model_used, trade = await _groq_complete_multistep(
+                            client, messages, primary_model=route_model
+                        )
                 except httpx.HTTPStatusError as e:
                     if e.response.status_code == 401:
                         detail = "Invalid GROQ_API_KEY. Get a free key at https://console.groq.com"
@@ -1021,7 +1149,7 @@ async def _stream_chat_ndjson(messages: list[dict], vision: bool = False) -> Asy
                 else:
                     for i in range(0, len(content), chunk_size):
                         yield _ndjson_line({"c": content[i : i + chunk_size]})
-                yield _ndjson_line({"done": True, "model": model_used, "trade": trade})
+                yield _ndjson_line({"done": True, "model": model_used, "route": route_key, "trade": trade})
             else:
                 model_out = OLLAMA_MODEL
                 async with client.stream(
@@ -1078,11 +1206,17 @@ async def chat_stream(req: ChatRequest):
         omit_rss_block=omit_rss,
     )
     vision_images = _safe_chat_images(req.images)
+    route_key, route_model = resolve_groq_route(lu, has_images=bool(vision_images))
     if vision_images:
         messages = _with_vision_images(messages, vision_images)
 
     return StreamingResponse(
-        _stream_chat_ndjson(messages, vision=bool(vision_images)),
+        _stream_chat_ndjson(
+            messages,
+            vision=bool(vision_images),
+            route_key=route_key,
+            route_model=route_model,
+        ),
         media_type="application/x-ndjson",
         headers={
             "Cache-Control": "no-cache",

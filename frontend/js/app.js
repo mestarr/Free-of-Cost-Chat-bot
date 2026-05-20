@@ -108,6 +108,19 @@
     return strategyModeSelect && strategyModeSelect.value ? strategyModeSelect.value : 'day_trader';
   }
 
+  function formatGroqRouteLabel(route, model) {
+    const key = String(route || '').toLowerCase();
+    const labels = {
+      vision: 'Vision',
+      trade: 'Trade (70b)',
+      fast: 'Fast (8b)',
+      default: 'Default',
+    };
+    const head = labels[key] || 'Model';
+    const tail = model ? String(model).split('/').pop() : '';
+    return tail ? `${head} · ${tail}` : head;
+  }
+
   function initStrategyMode() {
     if (!strategyModeSelect) return;
     try {
@@ -3011,6 +3024,15 @@
           }
           setTyping(botDiv, false);
           botDiv.classList.remove('streaming');
+          const chatSaveStatus = document.getElementById('chat-save-status');
+          if (chatSaveStatus && (obj.route || obj.model)) {
+            chatSaveStatus.textContent = formatGroqRouteLabel(obj.route, obj.model);
+            window.setTimeout(() => {
+              if (chatSaveStatus.textContent === formatGroqRouteLabel(obj.route, obj.model)) {
+                chatSaveStatus.textContent = '';
+              }
+            }, 6000);
+          }
         }
         return 'continue';
       };

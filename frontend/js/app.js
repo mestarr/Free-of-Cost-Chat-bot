@@ -587,6 +587,22 @@
   const MAX_STANCE_ENTRIES = 24;
   const STANCE_FOLLOWUP_MS = 24 * 60 * 60 * 1000;
 
+  const PAPER_TRADES_KEY = 'cryptochatpal_paper_trades';
+  const MAX_PAPER_ENTRIES = 40;
+  const PAPER_CHECK_24H_MS = 24 * 60 * 60 * 1000;
+  const PAPER_CHECK_7D_MS = 7 * 24 * 60 * 60 * 1000;
+  const COIN_INFER_PATTERNS = [
+    ['bitcoin', /\b(btc|bitcoin)\b/i],
+    ['ethereum', /\b(eth|ethereum)\b/i],
+    ['solana', /\b(sol|solana)\b/i],
+    ['ripple', /\b(xrp|ripple)\b/i],
+    ['cardano', /\b(ada|cardano)\b/i],
+    ['binancecoin', /\b(bnb|binancecoin)\b/i],
+    ['dogecoin', /\b(doge|dogecoin)\b/i],
+    ['polkadot', /\b(dot|polkadot)\b/i],
+    ['sui', /\b(sui)\b/i],
+  ];
+
   function loadStanceLedger() {
     try {
       const raw = localStorage.getItem(STANCE_LEDGER_KEY);
@@ -659,7 +675,7 @@
     updateSessionDeskUI();
   }
 
-  function maybeCaptureStanceFromTrade(trade) {
+  function maybeCaptureStanceFromTrade(trade, userText) {
     if (!trade || typeof trade !== 'object') return;
     const view = trade.view != null ? String(trade.view).trim().slice(0, 120) : '';
     if (!view && trade.confidence == null && trade.score_total == null) return;
@@ -670,7 +686,206 @@
     }));
     stanceLedger = stanceLedger.slice(0, MAX_STANCE_ENTRIES);
     saveStanceLedger();
+    capturePaperTrade(trade, userText);
     updateSessionDeskUI();
+  }
+
+  function inferCoinIdFromText(text) {
+    const blob = String(text || '');
+    if (!blob.trim()) return null;
+    for (const [id, re] of COIN_INFER_PATTERNS) {
+      if (re.test(blob)) return id;
+    }
+    return null;
+  }
+
+  function loadPaperTrades() {
+    try {
+      const raw = localStorage.getItem(PAPER_TRADES_KEY);
+      if (!raw) return [];
+      const arr = JSON.parse(raw);
+      if (!Array.isArray(arr)) return [];
+      return arr
+        .filter((x) => x && typeof x === 'object' && typeof x.t === 'number')
+        .map((x) => ({
+          id: typeof x.id === 'string' ? x.id : `paper-${x.t}`,
+          t: x.t,
+          coinId: typeof x.coinId === 'string' ? x.coinId : 'bitcoin',
+          entryUsd: typeof x.entryUsd === 'number' ? x.entryUsd : null,
+          check24hAt: typeof x.check24hAt === 'number' ? x.check24hAt : x.t + PAPER_CHECK_24H_MS,
+          check7dAt: typeof x.check7dAt === 'number' ? x.check7dAt : x.t + PAPER_CHECK_7D_MS,
+          trade: x.trade && typeof x.trade === 'object' ? x.trade : {},
+          outcomes: x.outcomes && typeof x.outcomes === 'object' ? x.outcomes : {},
+        }))
+        .slice(0, MAX_PAPER_ENTRIES);
+    } catch {
+      return [];
+    }
+  }
+
+  function savePaperTrades() {
+    try {
+      localStorage.setItem(PAPER_TRADES_KEY, JSON.stringify(paperTrades.slice(0, MAX_PAPER_ENTRIES)));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  let paperTrades = loadPaperTrades();
+  let paperOutcomeBusy = false;
+
+  function capturePaperTrade(trade, userText) {
+    if (!trade || typeof trade !== 'object') return;
+    const view = trade.view != null ? String(trade.view).trim() : '';
+    if (!view && trade.confidence == null) return;
+    const coinId =
+      (trade.coin_gecko_id && String(trade.coin_gecko_id).trim()) ||
+      inferCoinIdFromText(userText) ||
+      inferCoinIdFromText(trade.thesis) ||
+      inferCoinIdFromText(view) ||
+      'bitcoin';
+    const row = lastPricesPayload[coinId];
+    const entryUsd = row && row.usd != null && !Number.isNaN(Number(row.usd)) ? Number(row.usd) : null;
+    const t = Date.now();
+    paperTrades.unshift({
+      id: `paper-${t}-${Math.random().toString(36).slice(2, 8)}`,
+      t,
+      coinId,
+      entryUsd,
+      check24hAt: t + PAPER_CHECK_24H_MS,
+      check7dAt: t + PAPER_CHECK_7D_MS,
+      trade: { ...trade },
+      outcomes: {},
+    });
+    paperTrades = paperTrades.slice(0, MAX_PAPER_ENTRIES);
+    savePaperTrades();
+  }
+
+  function paperHorizonLabel(hz) {
+    return hz === 'd7' ? '7d' : '24h';
+  }
+
+  function paperVerdictLabel(verdict) {
+    if (verdict === 'aligned') return 'Aligned';
+    if (verdict === 'missed') return 'Missed';
+    if (verdict === 'mixed') return 'Mixed';
+    return 'Pending';
+  }
+
+  function computePaperBacktest() {
+    const done = [];
+    for (const e of paperTrades) {
+      for (const hz of ['h24', 'd7']) {
+        const o = e.outcomes && e.outcomes[hz];
+        if (o && o.ready && typeof o.score === 'number') done.push(o.score);
+      }
+    }
+    if (!done.length) return { count: 0, score: null };
+    const sum = done.reduce((a, s) => a + Number(s), 0);
+    return { count: done.length, score: Math.round(sum / done.length) };
+  }
+
+  async function fetchPaperOutcome(ent, horizon) {
+    const params = new URLSearchParams({
+      coin_id: ent.coinId,
+      at_ms: String(ent.t),
+      horizon,
+    });
+    const view = ent.trade && ent.trade.view ? String(ent.trade.view) : '';
+    if (view) params.set('view', view.slice(0, 200));
+    if (ent.entryUsd != null && ent.entryUsd > 0) params.set('entry_usd', String(ent.entryUsd));
+    const res = await fetch(`/api/paper/outcome?${params.toString()}`, {
+      headers: ccpApiAuthHeaders(),
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(t || res.statusText || 'outcome failed');
+    }
+    return res.json();
+  }
+
+  async function checkDuePaperOutcomes() {
+    if (paperOutcomeBusy) return;
+    paperOutcomeBusy = true;
+    const now = Date.now();
+    let changed = false;
+    try {
+      for (const ent of paperTrades) {
+        if (!ent.outcomes) ent.outcomes = {};
+        for (const [hz, dueAt] of [
+          ['h24', ent.check24hAt],
+          ['d7', ent.check7dAt],
+        ]) {
+          if (ent.outcomes[hz] && (ent.outcomes[hz].ready || ent.outcomes[hz].error)) continue;
+          if (Number(dueAt || 0) > now) continue;
+          try {
+            const data = await fetchPaperOutcome(ent, hz);
+            ent.outcomes[hz] = data;
+            changed = true;
+          } catch {
+            ent.outcomes[hz] = { ready: true, error: 'fetch_failed', horizon: hz };
+            changed = true;
+          }
+        }
+      }
+      if (changed) savePaperTrades();
+    } finally {
+      paperOutcomeBusy = false;
+      if (changed) updateSessionDeskUI();
+    }
+  }
+
+  function renderPaperTrading(list, readout, scoreEl) {
+    if (!list || !readout || !scoreEl) return;
+    const now = Date.now();
+    const bt = computePaperBacktest();
+    scoreEl.textContent = bt.score == null ? 'Backtest —' : `Backtest ${bt.score}/100 (${bt.count})`;
+    const pending24 = paperTrades.filter((e) => !e.outcomes.h24 && Number(e.check24hAt) > now).length;
+    const pending7 = paperTrades.filter((e) => !e.outcomes.d7 && Number(e.check7dAt) > now).length;
+    const due24 = paperTrades.filter((e) => !e.outcomes.h24?.ready && Number(e.check24hAt) <= now).length;
+    const due7 = paperTrades.filter((e) => !e.outcomes.d7?.ready && Number(e.check7dAt) <= now).length;
+    if (due24 + due7 > 0) {
+      readout.textContent = `Checking ${due24 + due7} outcome(s) against CoinGecko history…`;
+    } else if (!paperTrades.length) {
+      readout.textContent =
+        'No paper trades yet. Ask for buy/sell analysis — structured emit_trade_analysis output is stored automatically.';
+    } else {
+      readout.textContent = `${paperTrades.length} paper trade(s) · ${pending24} awaiting 24h · ${pending7} awaiting 7d.`;
+    }
+
+    list.innerHTML = '';
+    const rows = paperTrades.slice(0, 10);
+    for (const e of rows) {
+      const li = document.createElement('li');
+      li.className = 'session-diary-item session-paper-item';
+      const view = (e.trade && e.trade.view) || '(trade)';
+      const conf = e.trade && e.trade.confidence != null ? `${e.trade.confidence}%` : '';
+      const entry =
+        e.entryUsd != null ? `$${Number(e.entryUsd).toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '—';
+      const bits = [];
+      for (const hz of ['h24', 'd7']) {
+        const o = e.outcomes[hz];
+        const due = Number(hz === 'h24' ? e.check24hAt : e.check7dAt);
+        if (!o) {
+          bits.push(`${paperHorizonLabel(hz)}: ${due <= now ? 'due' : dueLabel(due).replace('Due ', '')}`);
+        } else if (!o.ready) {
+          bits.push(`${paperHorizonLabel(hz)}: pending`);
+        } else if (o.error) {
+          bits.push(`${paperHorizonLabel(hz)}: n/a`);
+        } else {
+          const pct = o.pct_change != null ? `${o.pct_change >= 0 ? '+' : ''}${Number(o.pct_change).toFixed(2)}%` : '';
+          bits.push(`${paperHorizonLabel(hz)}: ${paperVerdictLabel(o.verdict)} ${pct}`.trim());
+        }
+      }
+      li.innerHTML = `
+        <div class="session-diary-meta">
+          <time datetime="${new Date(e.t).toISOString()}">${new Date(e.t).toLocaleString()}</time>
+          <span>${escapeHtml(e.coinId)} · entry ${escapeHtml(entry)}</span>
+        </div>
+        <div class="session-diary-view">${escapeHtml(view)}${conf ? ` · ${escapeHtml(conf)}` : ''}</div>
+        <div class="session-paper-outcomes">${escapeHtml(bits.join(' · '))}</div>`;
+      list.appendChild(li);
+    }
   }
 
   function renderTradeCard(botDiv, trade) {
@@ -863,6 +1078,12 @@
     pulseRead.textContent = `${p.mood} — ${p.detail}`;
 
     renderTradingDiary(diaryList, diaryReadout, alignmentScore);
+
+    const paperList = document.getElementById('session-paper-list');
+    const paperReadout = document.getElementById('session-paper-readout');
+    const paperScore = document.getElementById('session-paper-score');
+    renderPaperTrading(paperList, paperReadout, paperScore);
+    void checkDuePaperOutcomes();
 
     if (!list) return;
     list.innerHTML = '';
@@ -3069,7 +3290,7 @@
       }
       conversation.push({ role: 'assistant', content: stored });
       if (structuredTrade) {
-        maybeCaptureStanceFromTrade(structuredTrade);
+        maybeCaptureStanceFromTrade(structuredTrade, apiUserContent || storedUserContent || displayUser);
       } else {
         maybeCaptureStance(stored);
       }
@@ -3269,6 +3490,7 @@
   const sessionDeskPanel = document.getElementById('session-desk-panel');
   const sessionDeskExport = document.getElementById('session-desk-export');
   const sessionDeskClearLedger = document.getElementById('session-desk-clear-ledger');
+  const sessionDeskClearPaper = document.getElementById('session-desk-clear-paper');
 
   function exportSessionDeskSnapshot() {
     const p = computeSessionPulse();
@@ -3279,6 +3501,8 @@
         exportedAt: new Date().toISOString(),
         marketPulse: p,
         alignment: computeAlignment(),
+        paperBacktest: computePaperBacktest(),
+        paperTrades,
         stanceLog: stanceLedger,
       },
       null,
@@ -3329,6 +3553,18 @@
       updateSessionDeskUI();
     });
   }
+
+  if (sessionDeskClearPaper) {
+    sessionDeskClearPaper.addEventListener('click', () => {
+      paperTrades = [];
+      savePaperTrades();
+      updateSessionDeskUI();
+    });
+  }
+
+  window.setInterval(() => {
+    void checkDuePaperOutcomes();
+  }, 120000);
 
   if (sessionDeskPanel) {
     sessionDeskPanel.addEventListener('click', (e) => {

@@ -309,7 +309,7 @@
       <div id="session-desk-panel" class="session-desk hidden" aria-hidden="true">
         <div class="session-desk-inner">
           <p class="session-desk-lead">
-            <strong>Session desk</strong> blends your <em>watchlist volatility</em> with <em>headline tone</em> into one live pulse, keeps a <em>stance log</em>, and schedules 24h trade reflections.
+            <strong>Session desk</strong> blends watchlist volatility with headline tone, logs <em>paper trades</em> from structured analysis (24h/7d backtest), keeps a <em>stance log</em>, and schedules 24h reflections.
           </p>
           <div class="session-pulse" aria-live="polite">
             <div class="session-pulse-top">
@@ -324,6 +324,15 @@
           <div class="session-desk-actions">
             <button type="button" id="session-desk-export" class="chat-toolbar-btn">Export snapshot</button>
             <button type="button" id="session-desk-clear-ledger" class="chat-toolbar-btn">Clear stance log</button>
+            <button type="button" id="session-desk-clear-paper" class="chat-toolbar-btn">Clear paper log</button>
+          </div>
+          <div class="session-paper-block">
+            <div class="session-diary-head">
+              <span>Paper trading</span>
+              <span id="session-paper-score" class="session-alignment-score">Backtest —</span>
+            </div>
+            <p id="session-paper-readout" class="session-diary-readout">emit_trade_analysis calls are logged with entry price; 24h and 7d outcomes auto-check when due.</p>
+            <ul id="session-paper-list" class="session-diary-list session-paper-list"></ul>
           </div>
           <div class="session-diary-block">
             <div class="session-diary-head">
@@ -663,6 +672,6 @@
     </script>
   </div>
 
-  <script src="js/app.js?v=20260512-model-routing" defer></script>
+  <script src="js/app.js?v=20260513-paper-trading" defer></script>
 </body>
 </html>

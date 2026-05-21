@@ -2,6 +2,8 @@
 
 A **free**, crypto-focused AI chatbot with a web UI, **live USD spot prices** (CoinGecko), and **headlines from crypto RSS feeds** (CoinDesk, Decrypt, BeInCrypto). The brain uses either **Groq** (free cloud, no local install) or **Ollama** (fully local).
 
+There is **no separate frontend dev server** — `uvicorn` serves `frontend/` and the API on **http://127.0.0.1:8000**.
+
 ## What you need
 
 - **Python 3.10+**
@@ -11,7 +13,9 @@ A **free**, crypto-focused AI chatbot with a web UI, **live USD spot prices** (C
 
 | Path | Purpose |
 |------|---------|
-| `backend/main.py` | FastAPI app: `/api/chat`, `/api/chat/stream`, `/api/prices`, `/api/news`, serves static frontend |
+| `backend/main.py` | FastAPI app: chat, prices, news, paper outcomes; serves static `frontend/` |
+| `backend/llm_tools.py` | Groq tools (`emit_trade_analysis`, prices, headlines, macro) |
+| `backend/paper.py` | Paper-trade outcome scoring vs historical CoinGecko USD |
 | `backend/prices.py` | CoinGecko live prices (cached), shared with chat context |
 | `backend/news.py` | RSS headline aggregation (cached), shared with chat context |
 | `backend/accounts.py` | SQLite API keys (hashed) and per-day usage counters |
@@ -53,13 +57,20 @@ A **free**, crypto-focused AI chatbot with a web UI, **live USD spot prices** (C
 
 ## Quick start (Ollama – fully local)
 
-1. Install [Ollama](https://ollama.com), then:
+1. Install [Ollama](https://ollama.com) (Windows installer) and keep the app running (system tray).
+2. Pull the default model:
 
    ```powershell
    ollama pull llama3.2
+   ollama list
    ```
 
-2. Do **not** set `GROQ_API_KEY` in `.env` (or remove it). Run the server as above.
+3. In `.env`, **remove or leave empty** `GROQ_API_KEY`. If a `gsk_…` key is still set, the app uses **Groq**, not Ollama.
+4. Optional: `OLLAMA_MODEL=llama3.2`, `OLLAMA_URL=http://localhost:11434`.
+5. Run the server as in the Groq quick start (same `uvicorn` command).
+6. Open **http://127.0.0.1:8000** and chat.
+
+**Ollama-only limits:** no chart screenshot vision, no Groq tool loop / multi-model routing — text chat, prices, news, and session desk still work. Test Ollama: `ollama run llama3.2 "hi"`.
 
 ## Configuration
 
@@ -67,9 +78,16 @@ Use **`.env.example`** as the checklist for every variable (each is commented th
 
 ### LLM and context
 
-- **Groq**: `GROQ_API_KEY` in `.env`; optional `GROQ_MODEL` (default `llama-3.1-8b-instant`).
-- **Ollama**: optional `OLLAMA_MODEL` (default `llama3.2`), `OLLAMA_URL` if Ollama runs elsewhere.
+| If `.env` has… | Backend uses |
+|----------------|--------------|
+| `GROQ_API_KEY=gsk_…` (non-empty) | **Groq** (cloud) |
+| No / empty `GROQ_API_KEY` | **Ollama** at `OLLAMA_URL` (default `http://localhost:11434`) |
+
+- **Groq**: `GROQ_API_KEY`; optional `GROQ_MODEL` when `GROQ_MODEL_ROUTING=0`. With routing on (default): `GROQ_FAST_MODEL` (8b Q&A), `GROQ_TRADE_MODEL` (70b trades), `GROQ_VISION_MODEL` (chart images). See `.env.example`.
+- **Ollama**: `OLLAMA_MODEL` (default `llama3.2`), `OLLAMA_URL` if Ollama runs elsewhere.
 - **News RSS**: optional `NEWS_CACHE_SECONDS` (default `300`), `NEWS_MAX_HEADLINES_LLM` (default `18`), `NEWS_USER_AGENT`.
+
+**Port 8000 busy?** Stop the old `uvicorn` process or use `--port 8001`.
 
 ### Shared Redis (optional)
 

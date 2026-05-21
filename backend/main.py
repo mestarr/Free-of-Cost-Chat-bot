@@ -27,6 +27,7 @@ from .llm_tools import GROQ_TOOLS, execute_tool, normalize_trade_card
 from .news import fetch_news_snapshot_for_llm, get_fed_news_api_payload, get_news_api_payload, llm_news_grounding_note
 from .observability import RequestLoggingMiddleware, counters_snapshot
 from .onchain import fetch_onchain_markets_json
+from .paper import evaluate_paper_outcome, normalize_coin_id
 from .prices import (
     default_prices_grounding_note,
     fetch_live_price_snapshot,
@@ -958,6 +959,34 @@ async def _groq_complete_multistep(
             trade_card,
         )
     return content, model_out, trade_card
+
+
+@app.get("/api/paper/outcome")
+async def api_paper_outcome(
+    coin_id: str = Query(..., max_length=64, description="CoinGecko coin id slug"),
+    at_ms: int = Query(..., ge=1, description="Trade entry time (Unix ms)"),
+    horizon: str = Query("h24", pattern="^(h24|d7)$"),
+    view: str | None = Query(None, max_length=200),
+    entry_usd: float | None = Query(None, gt=0, description="Optional entry USD captured client-side"),
+):
+    """Score a paper trade vs historical USD at entry and at +24h or +7d."""
+    if not normalize_coin_id(coin_id):
+        raise HTTPException(status_code=400, detail="Invalid coin_id")
+    try:
+        return await evaluate_paper_outcome(
+            coin_id=coin_id,
+            at_ms=at_ms,
+            horizon=horizon,
+            view=view,
+            entry_usd=entry_usd,
+        )
+    except ValueError as e:
+        code = str(e)
+        if code in ("invalid_coin_id", "invalid_horizon"):
+            raise HTTPException(status_code=400, detail=code) from e
+        raise HTTPException(status_code=400, detail="bad_request") from e
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Paper outcome unavailable: {e!s}") from e
 
 
 @app.get("/api/prices")

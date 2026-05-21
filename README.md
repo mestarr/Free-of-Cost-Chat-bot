@@ -152,8 +152,9 @@ Sentiment labels in the UI are **rough keyword heuristics**, not financial analy
 ## Session desk
 
 - Open **Session desk** from the chat toolbar for a **Market pulse** (0–100): a blend of your **watchlist** 24h volatility and **RSS headline** sentiment counts from the left column.
+- **Paper trading / backtest**: each `emit_trade_analysis` reply is stored in `localStorage` (`cryptochatpal_paper_trades`) with entry USD, coin id, and full structured fields. After **24h** and **7d**, the UI calls **`GET /api/paper/outcome`** (CoinGecko historical USD) and scores **aligned / mixed / missed** vs the stated view (buy/sell/hold). Optional `coin_gecko_id` in the tool output improves asset detection.
 - **Stance log**: when the assistant replies using the structured trade format (lines like `View:`, `Confidence:`, `Score:`), those fields are parsed and appended automatically (stored in `localStorage` under `cryptochatpal_stance_ledger`, last 24 entries).
-- **Export snapshot** downloads a JSON file with the current pulse readout and stance log (handy for journaling or sharing what the UI “saw” in that session).
+- **Export snapshot** downloads a JSON file with the current pulse readout, paper trades, and stance log (handy for journaling or sharing what the UI “saw” in that session).
 
 ## Editing the UI
 

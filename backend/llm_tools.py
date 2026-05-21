@@ -60,6 +60,14 @@ def normalize_trade_card(raw: dict | None) -> dict | None:
                 pass
     if "key_risks" in out:
         out["key_risks"] = _normalize_key_risks_field(out.get("key_risks"))
+    if "coin_gecko_id" in out and out["coin_gecko_id"] is not None:
+        from .paper import normalize_coin_id
+
+        cid = normalize_coin_id(str(out["coin_gecko_id"]))
+        if cid:
+            out["coin_gecko_id"] = cid
+        else:
+            del out["coin_gecko_id"]
     return out
 
 
@@ -177,6 +185,13 @@ GROQ_TOOLS: list[dict[str, Any]] = [
                     "what_changes_view": {
                         "type": "string",
                         "description": "One line on what would flip the view",
+                    },
+                    "coin_gecko_id": {
+                        "type": "string",
+                        "description": (
+                            "Primary asset as CoinGecko id slug when clear "
+                            '(e.g. "bitcoin", "ethereum"). Omit if not asset-specific.'
+                        ),
                     },
                 },
                 "required": ["view", "confidence"],

@@ -404,6 +404,18 @@ button {
   color: var(--accent);
 }
 
+.session-paper-block {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+}
+
+.session-paper-outcomes {
+  font-size: 0.8rem;
+  opacity: 0.88;
+  margin-top: 0.25rem;
+}
+
 .session-stance-block {
   border-top: 1px solid var(--border);
   padding-top: 0.5rem;

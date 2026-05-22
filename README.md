@@ -16,6 +16,7 @@ There is **no separate frontend dev server** — `uvicorn` serves `frontend/` an
 | `backend/main.py` | FastAPI app: chat, prices, news, paper outcomes; serves static `frontend/` |
 | `backend/llm_tools.py` | Groq tools (`emit_trade_analysis`, prices, headlines, macro) |
 | `backend/paper.py` | Paper-trade outcome scoring vs historical CoinGecko USD |
+| `backend/memory.py` | Per-user vector memory (sqlite-vec + sentence-transformers) |
 | `backend/prices.py` | CoinGecko live prices (cached), shared with chat context |
 | `backend/news.py` | RSS headline aggregation (cached), shared with chat context |
 | `backend/accounts.py` | SQLite API keys (hashed) and per-day usage counters |
@@ -166,6 +167,15 @@ Sentiment labels in the UI are **rough keyword heuristics**, not financial analy
 - In the **right column**, under the price editor, **Portfolio** lets you track **holdings** by CoinGecko id: **amount** and optional **average buy price (USD)**.
 - **Value** and **unrealized P/L** use the same live prices as the watchlist (`GET /api/prices`). Coins only in the portfolio are still fetched (IDs are merged into one request).
 - Everything is stored in **`localStorage`** (`cryptochatpal_portfolio`); nothing is sent to a server except the existing public price API.
+
+## Vector memory (RAG)
+
+- Each browser gets a stable **`memory_user_id`** (`localStorage` → `cryptochatpal_memory_user`, also sent as `X-CCP-Memory-User`).
+- After each chat turn, user + assistant text is embedded and stored in **sqlite-vec** (`.data/ccp_memory.sqlite` by default).
+- Before the next reply, the server retrieves the top similar past snippets and injects them as a system block.
+- **Session desk → Vector memory** shows chunk count; **Clear my memory** calls `DELETE /api/memory`.
+- Requires `pip install -r requirements.txt` (`sqlite-vec`, `sentence-transformers`, `numpy`). First chat after install downloads the embedding model (~80MB). Set `CCP_MEMORY_ENABLED=0` to disable.
+- With **CCP API keys**, memory is scoped per key (`key_<id>`) instead of the browser id.
 
 ## Session desk
 

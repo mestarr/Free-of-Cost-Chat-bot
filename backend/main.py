@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,6 +24,16 @@ from .admin_routes import me_router
 from .admin_routes import router as admin_router
 from .fng import fetch_fear_greed_json
 from .llm_tools import GROQ_TOOLS, execute_tool, normalize_trade_card
+from .memory import (
+    MEMORY_ENABLED,
+    clear_user_memory,
+    count_user_chunks,
+    ingest_turn,
+    init_memory_db,
+    memory_status,
+    resolve_memory_user_id,
+    retrieve_context_block,
+)
 from .news import fetch_news_snapshot_for_llm, get_fed_news_api_payload, get_news_api_payload, llm_news_grounding_note
 from .observability import RequestLoggingMiddleware, counters_snapshot
 from .onchain import fetch_onchain_markets_json
@@ -243,6 +253,11 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     strategy_mode: str | None = Field(default=None, max_length=32)
     images: list[ChatImage] = Field(default_factory=list, max_length=3)
+    memory_user_id: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Stable per-browser user id for vector memory (localStorage).",
+    )
 
 
 class ChatResponse(BaseModel):
@@ -284,6 +299,15 @@ def _strategy_mode_prompt(mode: str | None) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_accounts_db()
+    try:
+        init_memory_db()
+        st = memory_status()
+        if st.get("available"):
+            print(f"Vector memory enabled ({st.get('model')}).")
+        elif MEMORY_ENABLED:
+            print(f"Vector memory unavailable: {st.get('error')}")
+    except Exception as e:
+        print(f"Vector memory init skipped: {e}")
     if USE_GROQ:
         print("Using Groq (free cloud). No Ollama needed.")
         if GROQ_MODEL_ROUTING:
@@ -522,6 +546,7 @@ def _build_messages(
     price_grounding: str = "",
     news_grounding: str = "",
     omit_rss_block: bool = False,
+    memory_context: str = "",
 ) -> list[dict]:
     """System prompt + grounding manifest + optional live prices + headlines + conversation history."""
     utc_now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
@@ -555,6 +580,9 @@ def _build_messages(
     else:
         manifest_lines.append("No RSS headline list message follows.")
     out.append({"role": "system", "content": "\n".join(manifest_lines)})
+    mem = (memory_context or "").strip()
+    if mem:
+        out.append({"role": "system", "content": mem})
     if price_snapshot:
         out.append({"role": "system", "content": price_snapshot})
     if news_body:
@@ -1071,12 +1099,16 @@ async def api_markets_onchain(
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, request: Request):
     """Send conversation to Groq or Ollama with crypto-focused system prompt."""
     snapshot = await fetch_live_price_snapshot()
     lu = _last_user_content_from_request(req)
     omit_rss = USE_GROQ and _groq_short_format_turn(lu)
     news_snap = "" if omit_rss else await fetch_news_snapshot_for_llm()
+    mem_uid = _memory_user_from_request(request, req)
+    mem_ctx = ""
+    if mem_uid:
+        mem_ctx = await asyncio.to_thread(retrieve_context_block, mem_uid, lu)
     messages = _build_messages(
         req,
         snapshot,
@@ -1084,6 +1116,7 @@ async def chat(req: ChatRequest):
         default_prices_grounding_note(),
         llm_news_grounding_note(),
         omit_rss_block=omit_rss,
+        memory_context=mem_ctx,
     )
     vision_images = _safe_chat_images(req.images)
     route_key, route_model = resolve_groq_route(lu, has_images=bool(vision_images))
@@ -1101,6 +1134,8 @@ async def chat(req: ChatRequest):
                 content, model_used, trade = await _groq_complete_multistep(
                     client, messages, primary_model=route_model
                 )
+                if mem_uid and content:
+                    await asyncio.to_thread(ingest_turn, mem_uid, lu, content)
                 return ChatResponse(message=content, model=model_used, trade=trade, route=route_key)
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 401:
@@ -1124,6 +1159,8 @@ async def chat(req: ChatRequest):
                 data = r.json()
                 message = data.get("message", {})
                 content = message.get("content", "").strip()
+                if mem_uid and content:
+                    await asyncio.to_thread(ingest_turn, mem_uid, lu, content)
                 return ChatResponse(message=content, model=data.get("model", OLLAMA_MODEL))
             except httpx.ConnectError:
                 raise HTTPException(
@@ -1144,8 +1181,11 @@ async def _stream_chat_ndjson(
     vision: bool = False,
     route_key: str = "fast",
     route_model: str = GROQ_FAST_MODEL,
+    memory_user_id: str | None = None,
+    memory_user_text: str = "",
 ) -> AsyncIterator[bytes]:
     """Yield NDJSON lines: {"c":"chunk"} text deltas, then {"done":true,"model":...} or {"error":"..."}."""
+    assistant_reply: list[str] = []
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             if vision and not USE_GROQ:
@@ -1179,8 +1219,11 @@ async def _stream_chat_ndjson(
                     for i in range(0, len(content), chunk_size):
                         yield _ndjson_line({"c": content[i : i + chunk_size]})
                 yield _ndjson_line({"done": True, "model": model_used, "route": route_key, "trade": trade})
+                if content:
+                    assistant_reply.append(content)
             else:
                 model_out = OLLAMA_MODEL
+                ollama_parts: list[str] = []
                 async with client.stream(
                     "POST",
                     f"{OLLAMA_URL}/api/chat",
@@ -1207,8 +1250,11 @@ async def _stream_chat_ndjson(
                             break
                         piece = (obj.get("message") or {}).get("content") or ""
                         if piece:
+                            ollama_parts.append(piece)
                             yield _ndjson_line({"c": piece})
                     yield _ndjson_line({"done": True, "model": model_out})
+                    if ollama_parts:
+                        assistant_reply.append("".join(ollama_parts))
     except httpx.ConnectError:
         yield _ndjson_line(
             {
@@ -1217,15 +1263,81 @@ async def _stream_chat_ndjson(
         )
     except Exception as e:
         yield _ndjson_line({"error": str(e)})
+    finally:
+        if memory_user_id and (memory_user_text or assistant_reply):
+            assistant_body = (assistant_reply[0] if assistant_reply else "").strip()
+            if assistant_body:
+                try:
+                    n = await asyncio.to_thread(
+                        ingest_turn,
+                        memory_user_id,
+                        memory_user_text,
+                        assistant_body,
+                    )
+                    if n:
+                        yield _ndjson_line({"memory_stored": n})
+                except Exception:
+                    pass
+
+
+def _memory_user_from_request(request: Request, req: ChatRequest) -> str | None:
+    header_uid = request.headers.get("x-ccp-memory-user") or request.headers.get("X-CCP-Memory-User")
+    api_key_id = getattr(request.state, "ccp_api_key_id", None)
+    return resolve_memory_user_id(
+        body_user_id=req.memory_user_id,
+        header_user_id=header_uid,
+        api_key_id=api_key_id,
+    )
+
+
+@app.get("/api/memory/status")
+async def api_memory_status():
+    return memory_status()
+
+
+@app.delete("/api/memory")
+async def api_memory_clear(
+    request: Request,
+    memory_user_id: str | None = Query(None, max_length=64),
+):
+    uid = resolve_memory_user_id(
+        body_user_id=memory_user_id,
+        header_user_id=request.headers.get("x-ccp-memory-user"),
+        api_key_id=getattr(request.state, "ccp_api_key_id", None),
+    )
+    if not uid:
+        raise HTTPException(status_code=400, detail="memory_user_id required (query or X-CCP-Memory-User header)")
+    deleted = await asyncio.to_thread(clear_user_memory, uid)
+    return {"ok": True, "deleted": deleted, "memory_user_id": uid}
+
+
+@app.get("/api/memory/stats")
+async def api_memory_stats(
+    request: Request,
+    memory_user_id: str | None = Query(None, max_length=64),
+):
+    uid = resolve_memory_user_id(
+        body_user_id=memory_user_id,
+        header_user_id=request.headers.get("x-ccp-memory-user"),
+        api_key_id=getattr(request.state, "ccp_api_key_id", None),
+    )
+    if not uid:
+        raise HTTPException(status_code=400, detail="memory_user_id required")
+    count = await asyncio.to_thread(count_user_chunks, uid)
+    return {"memory_user_id": uid, "chunks": count, **memory_status()}
 
 
 @app.post("/api/chat/stream")
-async def chat_stream(req: ChatRequest):
+async def chat_stream(req: ChatRequest, request: Request):
     """Same context as /api/chat but streams assistant text as NDJSON (one JSON object per line)."""
     snapshot = await fetch_live_price_snapshot()
     lu = _last_user_content_from_request(req)
     omit_rss = USE_GROQ and _groq_short_format_turn(lu)
     news_snap = "" if omit_rss else await fetch_news_snapshot_for_llm()
+    mem_uid = _memory_user_from_request(request, req)
+    mem_ctx = ""
+    if mem_uid:
+        mem_ctx = await asyncio.to_thread(retrieve_context_block, mem_uid, lu)
     messages = _build_messages(
         req,
         snapshot,
@@ -1233,6 +1345,7 @@ async def chat_stream(req: ChatRequest):
         default_prices_grounding_note(),
         llm_news_grounding_note(),
         omit_rss_block=omit_rss,
+        memory_context=mem_ctx,
     )
     vision_images = _safe_chat_images(req.images)
     route_key, route_model = resolve_groq_route(lu, has_images=bool(vision_images))
@@ -1245,6 +1358,8 @@ async def chat_stream(req: ChatRequest):
             vision=bool(vision_images),
             route_key=route_key,
             route_model=route_model,
+            memory_user_id=mem_uid,
+            memory_user_text=lu,
         ),
         media_type="application/x-ndjson",
         headers={

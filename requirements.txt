@@ -5,3 +5,7 @@ websockets==14.2
 httpx==0.28.1
 python-dotenv==1.2.2
 redis==5.2.1
+# Vector memory (RAG) — optional; set CCP_MEMORY_ENABLED=0 to skip
+sqlite-vec==0.1.9
+sentence-transformers==3.4.1
+numpy>=2.0.0

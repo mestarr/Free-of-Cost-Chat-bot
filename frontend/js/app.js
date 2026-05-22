@@ -60,9 +60,28 @@
   const STRATEGY_MODE_KEY = 'cryptochatpal_strategy_mode';
   /** Optional SaaS API key (set via localStorage when server uses CCP_AUTH_MODE=required). */
   const CCP_API_KEY_STORAGE = 'ccp_api_key';
+  const MEMORY_USER_KEY = 'cryptochatpal_memory_user';
+
+  function getMemoryUserId() {
+    try {
+      let id = localStorage.getItem(MEMORY_USER_KEY);
+      if (!id || id.length < 8) {
+        id = `u_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
+        localStorage.setItem(MEMORY_USER_KEY, id);
+      }
+      return id;
+    } catch {
+      return null;
+    }
+  }
+
+  function ccpMemoryHeaders() {
+    const id = getMemoryUserId();
+    return id ? { 'X-CCP-Memory-User': id } : {};
+  }
 
   function ccpApiAuthHeaders() {
-    const h = {};
+    const h = { ...ccpMemoryHeaders() };
     try {
       const k = localStorage.getItem(CCP_API_KEY_STORAGE);
       if (k && String(k).trim()) h['X-CCP-API-Key'] = String(k).trim();
@@ -1062,6 +1081,45 @@
     });
   }
 
+  async function refreshMemoryStats() {
+    const countEl = document.getElementById('session-memory-count');
+    const readoutEl = document.getElementById('session-memory-readout');
+    const id = getMemoryUserId();
+    if (!countEl || !readoutEl || !id) return;
+    try {
+      const res = await fetch(`/api/memory/stats?memory_user_id=${encodeURIComponent(id)}`, {
+        headers: ccpApiAuthHeaders(),
+      });
+      if (!res.ok) {
+        readoutEl.textContent = 'Memory unavailable (install sqlite-vec + sentence-transformers).';
+        countEl.textContent = '—';
+        return;
+      }
+      const data = await res.json();
+      const chunks = Number(data.chunks || 0);
+      countEl.textContent = `${chunks} chunk${chunks === 1 ? '' : 's'}`;
+      readoutEl.textContent = data.available
+        ? `Your id ${id.slice(0, 12)}… — relevant past turns are retrieved each message.`
+        : `Memory disabled: ${data.error || 'unavailable'}`;
+    } catch {
+      readoutEl.textContent = 'Could not load memory stats.';
+    }
+  }
+
+  async function clearVectorMemory() {
+    const id = getMemoryUserId();
+    if (!id) return;
+    try {
+      const res = await fetch(`/api/memory?memory_user_id=${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: ccpApiAuthHeaders(),
+      });
+      if (res.ok) await refreshMemoryStats();
+    } catch {
+      /* ignore */
+    }
+  }
+
   function updateSessionDeskUI() {
     const pulseBar = document.getElementById('session-pulse-bar');
     const pulseVal = document.getElementById('session-pulse-value');
@@ -1084,6 +1142,7 @@
     const paperScore = document.getElementById('session-paper-score');
     renderPaperTrading(paperList, paperReadout, paperScore);
     void checkDuePaperOutcomes();
+    void refreshMemoryStats();
 
     if (!list) return;
     list.innerHTML = '';
@@ -3171,6 +3230,7 @@
           messages: messagesForApi,
           strategy_mode: getStrategyMode(),
           images,
+          memory_user_id: getMemoryUserId(),
         }),
       });
 
@@ -3491,6 +3551,7 @@
   const sessionDeskExport = document.getElementById('session-desk-export');
   const sessionDeskClearLedger = document.getElementById('session-desk-clear-ledger');
   const sessionDeskClearPaper = document.getElementById('session-desk-clear-paper');
+  const sessionMemoryClear = document.getElementById('session-memory-clear');
 
   function exportSessionDeskSnapshot() {
     const p = computeSessionPulse();
@@ -3559,6 +3620,12 @@
       paperTrades = [];
       savePaperTrades();
       updateSessionDeskUI();
+    });
+  }
+
+  if (sessionMemoryClear) {
+    sessionMemoryClear.addEventListener('click', () => {
+      void clearVectorMemory();
     });
   }
 

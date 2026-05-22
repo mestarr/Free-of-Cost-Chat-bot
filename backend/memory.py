@@ -243,7 +243,8 @@ def format_memory_context(hits: list[dict[str, Any]]) -> str:
     if not hits:
         return ""
     lines = [
-        "Relevant memory from this user's past chats (continuity only; may be outdated — prefer live injected data for prices/news):",
+        "Relevant memory from this user's past chats (continuity only; may be outdated — "
+        "prefer live injected data for prices/news):",
     ]
     for h in hits:
         ts = h.get("created_at") or ""

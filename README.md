@@ -152,6 +152,14 @@ Sentiment labels in the UI are **rough keyword heuristics**, not financial analy
 - Saved chat history stores your message plus a line like `(Attached: README.md)` so you know what you sent; it does **not** re-store full file bodies. To discuss the same file again in a later turn, attach it again.
 - The API accepts up to **200,000** characters per message body (including merged attachment text); very large pastes may be rejected.
 
+## Voice input / output (Web Speech API)
+
+- **No server or API cost** — uses the browser’s built-in speech recognition and synthesis (Chrome/Edge work best).
+- **Mic** (input row): tap to start/stop dictation; transcript fills the message box (edit, then Send).
+- Toolbar **Mic** / **Speaker**: toggle voice input and **auto-read** new assistant replies.
+- Each assistant message gets **Listen** / **Stop** for on-demand read-aloud.
+- Requires microphone permission for input; uses `localStorage` keys `cryptochatpal_voice_input` and `cryptochatpal_voice_output`.
+
 ## Light / dark theme
 
 - Use the **Light** and **Dark** buttons in the page header to switch themes.

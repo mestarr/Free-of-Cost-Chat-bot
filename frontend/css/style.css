@@ -886,6 +886,85 @@ html[data-theme='light'] .msg .trade-card {
   color: var(--error-text);
 }
 
+.chat-voice-btn {
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, color 0.2s;
+  flex-shrink: 0;
+}
+
+.chat-voice-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.chat-voice-btn.is-listening {
+  border-color: var(--accent);
+  background: rgba(0, 212, 170, 0.18);
+  color: var(--accent);
+  animation: voice-pulse 1.2s ease-in-out infinite;
+}
+
+.chat-voice-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@keyframes voice-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(0, 212, 170, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(0, 212, 170, 0);
+  }
+}
+
+.voice-status:not(.visually-hidden) {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  color: var(--accent);
+}
+
+.chat-toolbar-btn.is-voice-on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(0, 212, 170, 0.1);
+}
+
+.msg-voice-actions {
+  display: flex;
+  gap: 0.35rem;
+  margin-top: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.msg-speak-btn,
+.msg-voice-stop-btn {
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.msg-speak-btn:hover,
+.msg-voice-stop-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .chat-attach-btn {
   font-family: inherit;
   font-size: 0.95rem;

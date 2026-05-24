@@ -127,6 +127,66 @@
     return strategyModeSelect && strategyModeSelect.value ? strategyModeSelect.value : 'day_trader';
   }
 
+  const macroRadarBanners = document.getElementById('macro-radar-banners');
+
+  function macroKindLabel(kind) {
+    const k = String(kind || '').toLowerCase();
+    if (k === 'fomc') return 'FOMC';
+    if (k === 'cpi') return 'CPI';
+    if (k === 'sec') return 'SEC';
+    return k.toUpperCase() || 'MACRO';
+  }
+
+  function renderMacroRadar(data) {
+    if (!macroRadarBanners) return;
+    const events = data && Array.isArray(data.events) ? data.events : [];
+    if (!events.length) {
+      macroRadarBanners.classList.add('hidden');
+      macroRadarBanners.innerHTML = '';
+      return;
+    }
+    macroRadarBanners.classList.remove('hidden');
+    macroRadarBanners.innerHTML = '';
+    const head = document.createElement('div');
+    head.className = 'macro-radar-head';
+    const win = data.window_hours != null ? Math.round(Number(data.window_hours)) : 48;
+    head.textContent = `Macro radar — next ${win}h`;
+    macroRadarBanners.appendChild(head);
+    for (const ev of events) {
+      const card = document.createElement('div');
+      const urgency = ev.urgency === 'high' ? 'macro-radar-card--high' : 'macro-radar-card--medium';
+      card.className = `macro-radar-card ${urgency}`;
+      const hrs = ev.hours_until != null ? Number(ev.hours_until) : null;
+      const when =
+        hrs != null && hrs < 1
+          ? 'under 1h'
+          : hrs != null
+            ? `~${Math.round(hrs)}h`
+            : '';
+      const at = ev.at_utc ? new Date(ev.at_utc) : null;
+      const atStr = at && !Number.isNaN(at.getTime()) ? at.toLocaleString() : '';
+      card.innerHTML = `
+        <span class="macro-radar-kind">${escapeHtml(macroKindLabel(ev.kind))}</span>
+        <span class="macro-radar-title">${escapeHtml(ev.title || 'Event')}</span>
+        <span class="macro-radar-meta">${escapeHtml(when)}${atStr ? ` · ${escapeHtml(atStr)}` : ''}</span>`;
+      macroRadarBanners.appendChild(card);
+    }
+  }
+
+  async function loadMacroRadar() {
+    try {
+      const res = await fetch('/api/macro/radar', { headers: ccpApiAuthHeaders() });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        renderMacroRadar({ events: [] });
+        return;
+      }
+      renderMacroRadar(data);
+    } catch {
+      renderMacroRadar({ events: [] });
+    }
+  }
+
   const VOICE_INPUT_KEY = 'cryptochatpal_voice_input';
   const VOICE_OUTPUT_KEY = 'cryptochatpal_voice_output';
   const voiceStatusEl = document.getElementById('voice-status');
@@ -3098,10 +3158,12 @@
   loadOnchain();
   loadFng();
   loadFedNews();
+  loadMacroRadar();
   setInterval(loadOil, 300000);
   setInterval(loadOnchain, 120000);
   setInterval(loadFng, 300000);
   setInterval(loadFedNews, 300000);
+  setInterval(loadMacroRadar, 300000);
 
   function formatNewsTime(pub) {
     if (!pub) return '';
@@ -3400,6 +3462,7 @@
         if (msg.fed) renderFedNews(msg.fed);
         if (msg.fng) renderFng(msg.fng);
         if (msg.onchain) renderOnchain(msg.onchain);
+        if (msg.radar) renderMacroRadar(msg.radar);
       }
     };
     liveWs.onerror = () => {};

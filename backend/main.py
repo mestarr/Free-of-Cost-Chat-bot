@@ -24,6 +24,7 @@ from .admin_routes import me_router
 from .admin_routes import router as admin_router
 from .fng import fetch_fear_greed_json
 from .llm_tools import GROQ_TOOLS, execute_tool, normalize_trade_card
+from .macro_radar import fetch_macro_radar_json, format_radar_context
 from .memory import (
     MEMORY_ENABLED,
     clear_user_memory,
@@ -547,6 +548,7 @@ def _build_messages(
     news_grounding: str = "",
     omit_rss_block: bool = False,
     memory_context: str = "",
+    macro_radar_context: str = "",
 ) -> list[dict]:
     """System prompt + grounding manifest + optional live prices + headlines + conversation history."""
     utc_now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
@@ -583,6 +585,9 @@ def _build_messages(
     mem = (memory_context or "").strip()
     if mem:
         out.append({"role": "system", "content": mem})
+    radar = (macro_radar_context or "").strip()
+    if radar:
+        out.append({"role": "system", "content": radar})
     if price_snapshot:
         out.append({"role": "system", "content": price_snapshot})
     if news_body:
@@ -1056,6 +1061,23 @@ async def api_news():
         raise HTTPException(status_code=503, detail=f"News feed unavailable: {e!s}") from e
 
 
+@app.get("/api/macro/radar")
+async def api_macro_radar():
+    """FOMC / CPI / SEC events within MACRO_RADAR_WINDOW_HOURS (default 48h)."""
+    try:
+        return await fetch_macro_radar_json()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Macro radar unavailable: {e!s}") from e
+
+
+async def _macro_radar_context_for_llm() -> str:
+    try:
+        payload = await fetch_macro_radar_json()
+        return format_radar_context(payload.get("events") or [])
+    except Exception:
+        return ""
+
+
 @app.get("/api/news/fed")
 async def api_news_fed():
     """Latest Federal Reserve Board news (press + speeches via RSS)."""
@@ -1109,6 +1131,7 @@ async def chat(req: ChatRequest, request: Request):
     mem_ctx = ""
     if mem_uid:
         mem_ctx = await asyncio.to_thread(retrieve_context_block, mem_uid, lu)
+    radar_ctx = await _macro_radar_context_for_llm()
     messages = _build_messages(
         req,
         snapshot,
@@ -1117,6 +1140,7 @@ async def chat(req: ChatRequest, request: Request):
         llm_news_grounding_note(),
         omit_rss_block=omit_rss,
         memory_context=mem_ctx,
+        macro_radar_context=radar_ctx,
     )
     vision_images = _safe_chat_images(req.images)
     route_key, route_model = resolve_groq_route(lu, has_images=bool(vision_images))
@@ -1338,6 +1362,7 @@ async def chat_stream(req: ChatRequest, request: Request):
     mem_ctx = ""
     if mem_uid:
         mem_ctx = await asyncio.to_thread(retrieve_context_block, mem_uid, lu)
+    radar_ctx = await _macro_radar_context_for_llm()
     messages = _build_messages(
         req,
         snapshot,
@@ -1346,6 +1371,7 @@ async def chat_stream(req: ChatRequest, request: Request):
         llm_news_grounding_note(),
         omit_rss_block=omit_rss,
         memory_context=mem_ctx,
+        macro_radar_context=radar_ctx,
     )
     vision_images = _safe_chat_images(req.images)
     route_key, route_model = resolve_groq_route(lu, has_images=bool(vision_images))

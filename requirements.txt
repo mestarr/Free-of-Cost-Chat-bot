@@ -9,3 +9,5 @@ redis==5.2.1
 sqlite-vec==0.1.9
 sentence-transformers==3.4.1
 numpy>=2.0.0
+# IANA time zones on Windows (macro radar ET scheduling)
+tzdata>=2024.1

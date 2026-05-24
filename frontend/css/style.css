@@ -404,6 +404,67 @@ button {
   color: var(--accent);
 }
 
+.macro-radar-banners {
+  margin: 0 1rem 0.5rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(255, 193, 7, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.macro-radar-banners.hidden {
+  display: none;
+}
+
+.macro-radar-head {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.macro-radar-card {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0.35rem 0.65rem;
+  align-items: baseline;
+  padding: 0.45rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 0.85rem;
+}
+
+.macro-radar-card--high {
+  border-color: rgba(255, 152, 0, 0.55);
+  background: rgba(255, 152, 0, 0.1);
+}
+
+.macro-radar-card--medium {
+  border-color: rgba(255, 193, 7, 0.35);
+}
+
+.macro-radar-kind {
+  font-weight: 700;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+
+.macro-radar-title {
+  color: var(--text);
+}
+
+.macro-radar-meta {
+  font-size: 0.75rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .session-memory-block {
   margin-top: 1rem;
   padding-top: 0.75rem;

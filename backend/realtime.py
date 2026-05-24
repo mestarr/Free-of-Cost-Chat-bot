@@ -10,6 +10,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from .accounts import verify_api_key
 from .fng import fetch_fear_greed_json
+from .macro_radar import fetch_macro_radar_json
 from .news import get_fed_news_api_payload, get_news_api_payload
 from .onchain import fetch_onchain_markets_json
 from .prices import fetch_oil_prices_json, fetch_prices_json
@@ -74,8 +75,16 @@ async def websocket_live(websocket: WebSocket):
                     fed = await get_fed_news_api_payload(limit=8)
                     fng = await fetch_fear_greed_json()
                     onchain = await fetch_onchain_markets_json(ids_csv=ids_csv or None)
+                    radar = await fetch_macro_radar_json()
                     await websocket.send_json(
-                        {"type": "macro", "oil": oil, "fed": fed, "fng": fng, "onchain": onchain}
+                        {
+                            "type": "macro",
+                            "oil": oil,
+                            "fed": fed,
+                            "fng": fng,
+                            "onchain": onchain,
+                            "radar": radar,
+                        }
                     )
                 except Exception:
                     pass

@@ -176,6 +176,13 @@ Sentiment labels in the UI are **rough keyword heuristics**, not financial analy
 - **Value** and **unrealized P/L** use the same live prices as the watchlist (`GET /api/prices`). Coins only in the portfolio are still fetched (IDs are merged into one request).
 - Everything is stored in **`localStorage`** (`cryptochatpal_portfolio`); nothing is sent to a server except the existing public price API.
 
+## Macro radar banners
+
+- **FOMC**, **CPI**, and **SEC** events from official `.gov` schedules (Fed, BLS, SEC), cached ~1h.
+- Shows amber banners above the chat when something falls in the next **48 hours** (configurable via `MACRO_RADAR_WINDOW_HOURS`).
+- **`GET /api/macro/radar`** — JSON for the UI; the same summary is injected into chat context when events are active.
+- WebSocket `macro` pushes include a `radar` field when live feed is connected.
+
 ## Vector memory (RAG)
 
 - Each browser gets a stable **`memory_user_id`** (`localStorage` → `cryptochatpal_memory_user`, also sent as `X-CCP-Memory-User`).

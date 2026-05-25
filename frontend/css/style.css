@@ -465,6 +465,22 @@ button {
   white-space: nowrap;
 }
 
+.prices-share-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-top: 0.55rem;
+}
+
+.prices-share-btn {
+  white-space: nowrap;
+}
+
+.prices-share-status {
+  font-size: 0.8rem;
+  color: var(--accent);
+}
+
 .session-memory-block {
   margin-top: 1rem;
   padding-top: 0.75rem;

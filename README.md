@@ -160,6 +160,13 @@ Sentiment labels in the UI are **rough keyword heuristics**, not financial analy
 - Each assistant message gets **Listen** / **Stop** for on-demand read-aloud.
 - Requires microphone permission for input; uses `localStorage` keys `cryptochatpal_voice_input` and `cryptochatpal_voice_output`.
 
+## Shareable watchlists
+
+- In the **Coin prices** editor, click **Share watchlist** — a short URL like `http://127.0.0.1:8000/#wl.Yml0Y29...` is copied to the clipboard.
+- Anyone opening that link gets a **confirm prompt** to load the watchlist (replaces their current one).
+- **No server upload** — the entire list is encoded in the URL hash (base64url, `#wl.` prefix). Compact enough to paste in chat, DMs, or social posts.
+- Supports up to 30 coins; coin ids and short labels are preserved.
+
 ## Light / dark theme
 
 - Use the **Light** and **Dark** buttons in the page header to switch themes.

@@ -495,6 +495,10 @@
                 <button type="button" id="prices-add-custom" class="prices-btn">Add</button>
               </div>
               <button type="button" id="prices-reset-default" class="prices-reset-btn">Reset to default</button>
+              <div class="prices-share-row">
+                <button type="button" id="prices-share-link" class="prices-btn prices-share-btn" title="Copy a short URL that loads this watchlist for anyone">Share watchlist</button>
+                <span id="prices-share-status" class="prices-share-status" aria-live="polite"></span>
+              </div>
             </div>
             <div id="prices-error" class="hidden"></div>
             <div id="prices-list"></div>
@@ -687,6 +691,6 @@
     </script>
   </div>
 
-  <script src="js/app.js?v=20260516-macro-radar" defer></script>
+  <script src="js/app.js?v=20260517-share-watchlist" defer></script>
 </body>
 </html>

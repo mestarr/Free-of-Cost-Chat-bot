@@ -1761,24 +1761,71 @@
     const raw = location.hash.replace(/^#/, '');
     if (!raw) return null;
     const i = raw.indexOf('.');
-    if (i < 4) return null;
+    if (i < 2) return null;
     const mode = raw.slice(0, i);
-    if (mode !== 'ccp0' && mode !== 'ccp1') return null;
     const payload = raw.slice(i + 1);
     if (!payload) return null;
-    return { mode, payload };
+    if (mode === 'ccp0' || mode === 'ccp1') return { kind: 'chat', mode, payload };
+    if (mode === 'wl') return { kind: 'watchlist', payload };
+    return null;
   }
 
   function clearShareHashFromUrl() {
     if (!location.hash) return;
     const h = location.hash.replace(/^#/, '');
-    if (!h.startsWith('ccp0.') && !h.startsWith('ccp1.')) return;
+    if (!h.startsWith('ccp0.') && !h.startsWith('ccp1.') && !h.startsWith('wl.')) return;
     history.replaceState(null, '', location.pathname + location.search);
+  }
+
+  function encodeWatchlistSlug(rows) {
+    const ids = rows.map((r) => `${r.id}:${r.sym}`).join(',');
+    return 'wl.' + bytesToBase64Url(new TextEncoder().encode(ids));
+  }
+
+  function decodeWatchlistSlug(payload) {
+    try {
+      const text = new TextDecoder().decode(base64UrlToBytes(payload));
+      if (!text || !text.includes(':')) return null;
+      const pairs = text.split(',').filter(Boolean);
+      const rows = [];
+      const seen = new Set();
+      for (const pair of pairs) {
+        const [rawId, rawSym] = pair.split(':');
+        const id = sanitizeCoinId(rawId || '');
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        const sym = sanitizeSym(rawSym || '') || id.slice(0, 12).toUpperCase();
+        rows.push({ id, sym });
+        if (rows.length >= MAX_PRICE_ROWS) break;
+      }
+      return rows.length ? rows : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function tryImportWatchlistFromHash() {
+    const parsed = parseShareHash();
+    if (!parsed || parsed.kind !== 'watchlist') return false;
+    const rows = decodeWatchlistSlug(parsed.payload);
+    if (!rows) {
+      clearShareHashFromUrl();
+      return false;
+    }
+    const names = rows.map((r) => r.sym).join(', ');
+    const ok = window.confirm(
+      `Load shared watchlist (${rows.length} coins: ${names})?\n\nThis replaces your current watchlist.`
+    );
+    clearShareHashFromUrl();
+    if (!ok) return true;
+    priceRows = rows;
+    persistPriceRowsAndRedraw();
+    return true;
   }
 
   async function tryImportSharedFromHash() {
     const parsed = parseShareHash();
-    if (!parsed) return;
+    if (!parsed || parsed.kind !== 'chat') return;
     let data;
     try {
       data = await decodeShareBundle(parsed.mode, parsed.payload);
@@ -2600,6 +2647,42 @@
       priceRows = DEFAULT_PRICE_ROWS.map((r) => ({ ...r }));
       if (pricesPresetSelect) pricesPresetSelect.value = '';
       persistPriceRowsAndRedraw();
+    });
+  }
+
+  const pricesShareBtn = document.getElementById('prices-share-link');
+  const pricesShareStatus = document.getElementById('prices-share-status');
+
+  function flashShareStatus(msg, ms) {
+    if (!pricesShareStatus) return;
+    pricesShareStatus.textContent = msg;
+    window.setTimeout(() => {
+      if (pricesShareStatus.textContent === msg) pricesShareStatus.textContent = '';
+    }, ms || 3500);
+  }
+
+  if (pricesShareBtn) {
+    pricesShareBtn.addEventListener('click', async () => {
+      if (!priceRows.length) {
+        flashShareStatus('No coins to share', 2500);
+        return;
+      }
+      const slug = encodeWatchlistSlug(priceRows);
+      const url = `${location.origin}${location.pathname}${location.search}#${slug}`;
+      if (url.length > 8000) {
+        flashShareStatus('Watchlist too large for a URL', 3500);
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(url);
+        flashShareStatus('Link copied — send it to anyone!', 3500);
+      } catch {
+        try {
+          window.prompt('Copy this watchlist link:', url);
+        } catch {
+          /* ignore */
+        }
+      }
     });
   }
 
@@ -4006,7 +4089,9 @@
 
   // Restore saved chat, then apply optional share-hash import, then render.
   async function bootChatUi() {
-    await tryImportSharedFromHash();
+    if (!tryImportWatchlistFromHash()) {
+      await tryImportSharedFromHash();
+    }
     renderConversation(conversation);
     renderHistoryList();
     updateSessionDeskUI();

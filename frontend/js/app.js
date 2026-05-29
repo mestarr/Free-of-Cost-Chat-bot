@@ -8,6 +8,7 @@
   const chatAttachBtn = document.getElementById('chat-attach');
   const chatAttachStatus = document.getElementById('chat-attach-status');
   const strategyModeSelect = document.getElementById('strategy-mode');
+  const agentModeCheckbox = document.getElementById('agent-mode');
   const pricesList = document.getElementById('prices-list');
   const pricesUpdated = document.getElementById('prices-updated');
   const pricesError = document.getElementById('prices-error');
@@ -58,6 +59,7 @@
   const SIDEBAR_RIGHT_COLLAPSED_KEY = 'cryptochatpal_sidebar_right_collapsed';
   const WIDGET_COLLAPSE_PREFIX = 'cryptochatpal_widget_';
   const STRATEGY_MODE_KEY = 'cryptochatpal_strategy_mode';
+  const AGENT_MODE_KEY = 'cryptochatpal_agent_mode';
   /** Optional SaaS API key (set via localStorage when server uses CCP_AUTH_MODE=required). */
   const CCP_API_KEY_STORAGE = 'ccp_api_key';
   const MEMORY_USER_KEY = 'cryptochatpal_memory_user';
@@ -125,6 +127,27 @@
 
   function getStrategyMode() {
     return strategyModeSelect && strategyModeSelect.value ? strategyModeSelect.value : 'day_trader';
+  }
+
+  function getAgentMode() {
+    return Boolean(agentModeCheckbox && agentModeCheckbox.checked);
+  }
+
+  const AGENT_TOOL_LABELS = {
+    get_prices: 'Live prices',
+    get_crypto_headlines: 'Headlines',
+    get_macro_snapshot: 'Macro',
+    get_fear_greed: 'Fear & Greed',
+    get_onchain_derivatives: 'Funding & flows',
+    emit_trade_analysis: 'Trade card',
+  };
+
+  function formatAgentStepLabel(step) {
+    if (!step || typeof step !== 'object') return 'Agent…';
+    const tool = String(step.tool || '').trim();
+    const name = AGENT_TOOL_LABELS[tool] || tool || 'Research';
+    const round = step.round ? ` (step ${step.round})` : '';
+    return `Agent: ${name}${round}`;
   }
 
   const macroRadarBanners = document.getElementById('macro-radar-banners');
@@ -458,6 +481,7 @@
     const key = String(route || '').toLowerCase();
     const labels = {
       vision: 'Vision',
+      agent: 'Agent (70b)',
       trade: 'Trade (70b)',
       fast: 'Fast (8b)',
       default: 'Default',
@@ -481,7 +505,20 @@
       } catch (e) {}
     });
   }
+
+  function initAgentMode() {
+    if (!agentModeCheckbox) return;
+    try {
+      agentModeCheckbox.checked = localStorage.getItem(AGENT_MODE_KEY) === '1';
+    } catch (e) {}
+    agentModeCheckbox.addEventListener('change', () => {
+      try {
+        localStorage.setItem(AGENT_MODE_KEY, getAgentMode() ? '1' : '0');
+      } catch (e) {}
+    });
+  }
   initStrategyMode();
+  initAgentMode();
 
   function syncSideRailUI(btnId, railId, expandLabel, collapseLabel, iconWhenCollapsed, iconWhenExpanded) {
     const rail = document.getElementById(railId);
@@ -3646,6 +3683,7 @@
         body: JSON.stringify({
           messages: messagesForApi,
           strategy_mode: getStrategyMode(),
+          agent_mode: getAgentMode(),
           images,
           memory_user_id: getMemoryUserId(),
         }),
@@ -3698,6 +3736,12 @@
           );
           botDiv.classList.add('error');
           return 'error';
+        }
+        if (obj.agent_step) {
+          const chatSaveStatus = document.getElementById('chat-save-status');
+          if (chatSaveStatus) {
+            chatSaveStatus.textContent = formatAgentStepLabel(obj.agent_step);
+          }
         }
         if (obj.trade && typeof obj.trade === 'object') {
           structuredTrade = obj.trade;

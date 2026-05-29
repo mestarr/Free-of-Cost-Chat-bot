@@ -21,3 +21,13 @@ def test_vision_route_with_images_flag():
 
 def test_trade_beats_generic_explain():
     assert resolve_groq_route("Explain whether I should sell ETH today")[0] == "trade"
+
+
+def test_agent_mode_uses_trade_model():
+    route, _model = resolve_groq_route("Give me a full market read on BTC", agent_mode=True)
+    assert route == "agent"
+
+
+def test_agent_mode_yields_to_short_format():
+    route, _ = resolve_groq_route("yes or no only", agent_mode=True)
+    assert route == "fast"

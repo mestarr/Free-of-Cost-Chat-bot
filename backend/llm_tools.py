@@ -8,7 +8,9 @@ import json
 import re
 from typing import Any
 
+from .fng import fetch_fear_greed_json
 from .news import get_fed_news_api_payload, get_news_items
+from .onchain import fetch_onchain_markets_json
 from .prices import fetch_oil_prices_json, get_price_data
 
 
@@ -200,6 +202,89 @@ GROQ_TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+GROQ_AGENT_EXTRA_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_fear_greed",
+            "description": (
+                "Fetch the Crypto Fear & Greed Index (0–100) and classification from Alternative.me. "
+                "Use in agent chains for sentiment / risk-appetite context before trade calls."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_onchain_derivatives",
+            "description": (
+                "Fetch Binance USDT-M futures metrics: mark price, funding rate, open interest, "
+                "5m taker buy/sell ratio, and long/short account ratio. Optional whale-transfer highlights. "
+                "Use for positioning, leverage crowding, and flow context (not provable spot exchange netflow)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "coin_gecko_ids": {
+                        "type": "string",
+                        "description": (
+                            "Comma-separated CoinGecko ids to focus on (e.g. ethereum,bitcoin). "
+                            "Omit for the app default watchlist."
+                        ),
+                    },
+                },
+            },
+        },
+    },
+]
+
+GROQ_AGENT_TOOLS: list[dict[str, Any]] = GROQ_TOOLS + GROQ_AGENT_EXTRA_TOOLS
+
+
+def groq_tools_for_mode(agent_mode: bool) -> list[dict[str, Any]]:
+    """Standard tools, or full agent toolkit (macro + F&G + derivatives chaining)."""
+    return GROQ_AGENT_TOOLS if agent_mode else GROQ_TOOLS
+
+
+def _slim_onchain_tool_payload(data: dict[str, Any]) -> dict[str, Any]:
+    items = data.get("items") if isinstance(data.get("items"), list) else []
+    slim_items: list[dict[str, Any]] = []
+    for it in items[:8]:
+        if not isinstance(it, dict):
+            continue
+        slim_items.append(
+            {
+                "id": it.get("id"),
+                "sym": it.get("sym"),
+                "mark_price": it.get("mark_price"),
+                "funding_pct_per_interval": it.get("funding_pct_per_interval"),
+                "open_interest_usd_est": it.get("open_interest_usd_est"),
+                "taker_buy_sell_ratio_5m": it.get("taker_buy_sell_ratio_5m"),
+                "long_short_account_ratio_5m": it.get("long_short_account_ratio_5m"),
+            }
+        )
+    whales = data.get("whales") if isinstance(data.get("whales"), dict) else {}
+    whale_items = whales.get("items") if isinstance(whales.get("items"), list) else []
+    slim_whales: list[dict[str, Any]] = []
+    for w in whale_items[:5]:
+        if isinstance(w, dict):
+            slim_whales.append(
+                {
+                    "blockchain": w.get("blockchain"),
+                    "symbol": w.get("symbol"),
+                    "amount_usd": w.get("amount_usd"),
+                    "timestamp_label": w.get("timestamp_label"),
+                }
+            )
+    return {
+        "fetched_at": data.get("fetched_at"),
+        "disclaimer": data.get("disclaimer"),
+        "items": slim_items,
+        "whale_transfers": slim_whales,
+        "whales_configured": bool(whales.get("configured")),
+    }
+
 
 async def execute_tool(name: str, arguments_json: str) -> str:
     """Run a tool by name; return a JSON string for the chat `tool` message content."""
@@ -244,6 +329,16 @@ async def execute_tool(name: str, arguments_json: str) -> str:
         oil = await fetch_oil_prices_json()
         fed = await get_fed_news_api_payload(limit=8)
         return json.dumps({"oil_metals": oil, "fed_headlines": fed}, ensure_ascii=False)
+
+    if name == "get_fear_greed":
+        fng = await fetch_fear_greed_json()
+        return json.dumps(fng, ensure_ascii=False)
+
+    if name == "get_onchain_derivatives":
+        raw_ids = args.get("coin_gecko_ids")
+        ids = raw_ids.strip() if isinstance(raw_ids, str) else ""
+        data = await fetch_onchain_markets_json(ids if ids else None)
+        return json.dumps(_slim_onchain_tool_payload(data), ensure_ascii=False)
 
     if name == "emit_trade_analysis":
         return json.dumps(

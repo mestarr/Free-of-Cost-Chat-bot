@@ -23,7 +23,7 @@ from .accounts import init_db as init_accounts_db
 from .admin_routes import me_router
 from .admin_routes import router as admin_router
 from .fng import fetch_fear_greed_json
-from .llm_tools import GROQ_TOOLS, execute_tool, normalize_trade_card
+from .llm_tools import execute_tool, groq_tools_for_mode, normalize_trade_card
 from .macro_radar import fetch_macro_radar_json, format_radar_context
 from .memory import (
     MEMORY_ENABLED,
@@ -92,6 +92,11 @@ try:
     LLM_MAX_TOOL_ROUNDS = max(1, min(16, int(_llm_tool_rounds_raw)))
 except ValueError:
     LLM_MAX_TOOL_ROUNDS = 8
+_llm_agent_rounds_raw = os.getenv("LLM_AGENT_MAX_TOOL_ROUNDS", "12").strip()
+try:
+    LLM_AGENT_MAX_TOOL_ROUNDS = max(LLM_MAX_TOOL_ROUNDS, min(16, int(_llm_agent_rounds_raw)))
+except ValueError:
+    LLM_AGENT_MAX_TOOL_ROUNDS = max(LLM_MAX_TOOL_ROUNDS, 12)
 
 # Groq free/on-demand tiers often cap a single request at ~6000 tokens (prompt + max_tokens + tool schemas).
 # Default completion cap stays well below LLM_MAX_TOKENS so prompt + requested output fits.
@@ -259,6 +264,10 @@ class ChatRequest(BaseModel):
         max_length=64,
         description="Stable per-browser user id for vector memory (localStorage).",
     )
+    agent_mode: bool = Field(
+        default=False,
+        description="When true, use extended tools and deeper tool chaining for complex analysis.",
+    )
 
 
 class ChatResponse(BaseModel):
@@ -290,6 +299,20 @@ STRATEGY_MODE_PROMPTS = {
         "show assumptions, and prefer learning value over a direct trade call when useful."
     ),
 }
+
+AGENT_MODE_PROMPT = """Agent mode (ON): multi-step research before the final answer.
+
+Rules:
+- For live prices, funding/OI, sentiment, headlines, or macro: call tools in sequence — do not invent numbers.
+- Typical chain for DCA / buy-sell / macro questions:
+  1) get_prices for the asset(s) and any ratio pair (e.g. ethereum,bitcoin for ETH/BTC).
+  2) get_onchain_derivatives for funding, open interest, and positioning.
+  3) get_fear_greed for sentiment regime.
+  4) get_crypto_headlines and/or get_macro_snapshot when news or macro drives the thesis.
+  5) emit_trade_analysis once when the user wants buy/sell/hold, sizing, or a trade plan.
+- You may call multiple tools in one round when independent; otherwise chain across rounds.
+- In the final reply, briefly cite what each step showed (prices, funding, F&G, news).
+- Still obey format-first rules (yes/no only, one word) — then skip tools and emit_trade_analysis."""
 
 
 def _strategy_mode_prompt(mode: str | None) -> str:
@@ -522,15 +545,22 @@ def _is_education_intent(user_text: str) -> bool:
     return u.startswith(("what is ", "explain ", "define "))
 
 
-def resolve_groq_route(user_text: str, *, has_images: bool = False) -> tuple[str, str]:
+def resolve_groq_route(
+    user_text: str,
+    *,
+    has_images: bool = False,
+    agent_mode: bool = False,
+) -> tuple[str, str]:
     """
     Pick Groq model bucket for this turn.
-    Returns (route_key, model_id): vision | trade | fast.
+    Returns (route_key, model_id): vision | agent | trade | fast.
     """
     if has_images:
         return "vision", GROQ_VISION_MODEL
     if not GROQ_MODEL_ROUTING:
         return "default", GROQ_MODEL
+    if agent_mode and not _groq_short_format_turn(user_text):
+        return "agent", GROQ_TRADE_MODEL
     if _groq_short_format_turn(user_text):
         return "fast", GROQ_FAST_MODEL
     if _is_trade_intent(user_text):
@@ -555,11 +585,15 @@ def _build_messages(
     out: list[dict] = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "system", "content": _strategy_mode_prompt(req.strategy_mode)},
+    ]
+    if req.agent_mode:
+        out.append({"role": "system", "content": AGENT_MODE_PROMPT})
+    out.append(
         {
             "role": "system",
             "content": f"Context anchor: server time is {utc_now}. Use this for recency; injected prices/news may be slightly older than this instant.",
         },
-    ]
+    )
     pg = (price_grounding or "").strip() or "Price feed: status unknown."
     ng = (news_grounding or "").strip() or "News feed: status unknown."
     manifest_lines = [
@@ -860,21 +894,30 @@ async def _groq_complete_vision(client: httpx.AsyncClient, messages: list[dict])
     return content.strip() or "I could not read the chart screenshot clearly.", model_out
 
 
-async def _groq_complete_multistep(
+async def _groq_multistep_events(
     client: httpx.AsyncClient,
     messages: list[dict],
     *,
     primary_model: str,
-) -> tuple[str, str, dict | None]:
-    """Groq chat with optional tool loop; returns (assistant text, model id, optional trade dict from emit_trade_analysis)."""
+    agent_mode: bool = False,
+) -> AsyncIterator[dict]:
+    """
+    Groq tool loop as events: {"event":"agent_step",...} then {"event":"done",...}.
+    """
     msgs: list[dict] = _compress_assistant_turns_for_groq(_apply_groq_history_cap([dict(x) for x in messages]))
     low = _groq_short_format_turn(_groq_last_user_text(msgs))
     trade_card: dict | None = None
     model_out = primary_model
-    max_rounds = 1 if (low or not LLM_TOOLS_ENABLED) else LLM_MAX_TOOL_ROUNDS
+    tools = groq_tools_for_mode(agent_mode)
+    if low or not LLM_TOOLS_ENABLED:
+        max_rounds = 1
+    elif agent_mode:
+        max_rounds = LLM_AGENT_MAX_TOOL_ROUNDS
+    else:
+        max_rounds = LLM_MAX_TOOL_ROUNDS
 
     active_model = primary_model
-    for _ in range(max_rounds):
+    for round_idx in range(max_rounds):
         msgs = _trim_messages_for_groq(msgs)
         payload: dict = {
             "model": active_model,
@@ -883,12 +926,11 @@ async def _groq_complete_multistep(
             "max_tokens": _groq_completion_cap(low),
         }
         if LLM_TOOLS_ENABLED and not low:
-            payload["tools"] = GROQ_TOOLS
+            payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
         r = await _groq_post_chat_completion(client, payload)
 
-        # TPD daily cap: if primary model quota exhausted, fall back to 8b automatically
         if r.status_code == 429 and _groq_is_daily_quota_429(r) and active_model != _GROQ_FALLBACK_MODEL:
             active_model = _GROQ_FALLBACK_MODEL
             fallback_payload: dict = {
@@ -906,7 +948,6 @@ async def _groq_complete_multistep(
         msg = choice0.get("message") or {}
         finish_reason = choice0.get("finish_reason") or ""
 
-        # failed_generation: model produced a malformed tool call — strip tools and get a plain answer
         if finish_reason == "failed_generation":
             plain_payload2: dict = {
                 "model": active_model,
@@ -918,17 +959,25 @@ async def _groq_complete_multistep(
             r2.raise_for_status()
             data2 = r2.json()
             c2 = ((data2.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-            return (c2.strip() or "I could not generate a response — try rephrasing your question."), model_out, trade_card
+            yield {
+                "event": "done",
+                "content": c2.strip() or "I could not generate a response — try rephrasing your question.",
+                "model": model_out,
+                "trade": trade_card,
+            }
+            return
 
         tcalls = msg.get("tool_calls")
 
         if tcalls:
             if not LLM_TOOLS_ENABLED:
-                return (
-                    "Tools are disabled on the server; answer using only injected context.",
-                    model_out,
-                    trade_card,
-                )
+                yield {
+                    "event": "done",
+                    "content": "Tools are disabled on the server; answer using only injected context.",
+                    "model": model_out,
+                    "trade": trade_card,
+                }
+                return
             assistant_msg: dict = {"role": "assistant", "content": msg.get("content"), "tool_calls": tcalls}
             msgs.append(assistant_msg)
             for tc in tcalls:
@@ -940,6 +989,7 @@ async def _groq_complete_multistep(
                 if not isinstance(args, str):
                     args = json.dumps(args) if args is not None else "{}"
                 tid = tc.get("id") or ""
+                yield {"event": "agent_step", "tool": name, "round": round_idx + 1}
                 if name == "emit_trade_analysis":
                     try:
                         parsed = json.loads(args)
@@ -952,10 +1002,9 @@ async def _groq_complete_multistep(
             continue
 
         content = (msg.get("content") or "").strip()
-        return content, model_out, trade_card
+        yield {"event": "done", "content": content, "model": model_out, "trade": trade_card}
+        return
 
-    # Model kept requesting tools until round cap — one final completion without tools so the user
-    # still gets an answer (broad questions like "crypto world situation" can burn many tool rounds).
     msgs = _trim_messages_for_groq(msgs)
     fallback_tail = [
         {
@@ -985,12 +1034,31 @@ async def _groq_complete_multistep(
     msg = choice0.get("message") or {}
     content = (msg.get("content") or "").strip()
     if not content:
-        return (
+        content = (
             "I pulled live data but ran out of model steps before a final reply. "
-            "Try again, or ask one focused question (e.g. a single coin or topic).",
-            model_out,
-            trade_card,
+            "Try again, or ask one focused question (e.g. a single coin or topic)."
         )
+    yield {"event": "done", "content": content, "model": model_out, "trade": trade_card}
+
+
+async def _groq_complete_multistep(
+    client: httpx.AsyncClient,
+    messages: list[dict],
+    *,
+    primary_model: str,
+    agent_mode: bool = False,
+) -> tuple[str, str, dict | None]:
+    """Groq chat with optional tool loop; returns (assistant text, model id, optional trade dict)."""
+    content = ""
+    model_out = primary_model
+    trade_card: dict | None = None
+    async for ev in _groq_multistep_events(
+        client, messages, primary_model=primary_model, agent_mode=agent_mode
+    ):
+        if ev.get("event") == "done":
+            content = ev.get("content") or ""
+            model_out = ev.get("model") or primary_model
+            trade_card = ev.get("trade")
     return content, model_out, trade_card
 
 
@@ -1143,7 +1211,9 @@ async def chat(req: ChatRequest, request: Request):
         macro_radar_context=radar_ctx,
     )
     vision_images = _safe_chat_images(req.images)
-    route_key, route_model = resolve_groq_route(lu, has_images=bool(vision_images))
+    route_key, route_model = resolve_groq_route(
+        lu, has_images=bool(vision_images), agent_mode=bool(req.agent_mode)
+    )
     if vision_images:
         if not USE_GROQ:
             raise HTTPException(status_code=400, detail="Chart image analysis requires GROQ_API_KEY.")
@@ -1156,7 +1226,7 @@ async def chat(req: ChatRequest, request: Request):
                     content, model_used = await _groq_complete_vision(client, messages)
                     return ChatResponse(message=content, model=model_used, route=route_key)
                 content, model_used, trade = await _groq_complete_multistep(
-                    client, messages, primary_model=route_model
+                    client, messages, primary_model=route_model, agent_mode=bool(req.agent_mode)
                 )
                 if mem_uid and content:
                     await asyncio.to_thread(ingest_turn, mem_uid, lu, content)
@@ -1207,6 +1277,7 @@ async def _stream_chat_ndjson(
     route_model: str = GROQ_FAST_MODEL,
     memory_user_id: str | None = None,
     memory_user_text: str = "",
+    agent_mode: bool = False,
 ) -> AsyncIterator[bytes]:
     """Yield NDJSON lines: {"c":"chunk"} text deltas, then {"done":true,"model":...} or {"error":"..."}."""
     assistant_reply: list[str] = []
@@ -1221,9 +1292,28 @@ async def _stream_chat_ndjson(
                         content, model_used = await _groq_complete_vision(client, messages)
                         trade = None
                     else:
-                        content, model_used, trade = await _groq_complete_multistep(
-                            client, messages, primary_model=route_model
-                        )
+                        content = ""
+                        model_used = route_model
+                        trade = None
+                        async for ev in _groq_multistep_events(
+                            client,
+                            messages,
+                            primary_model=route_model,
+                            agent_mode=agent_mode,
+                        ):
+                            if ev.get("event") == "agent_step":
+                                yield _ndjson_line(
+                                    {
+                                        "agent_step": {
+                                            "tool": ev.get("tool"),
+                                            "round": ev.get("round"),
+                                        }
+                                    }
+                                )
+                            elif ev.get("event") == "done":
+                                content = ev.get("content") or ""
+                                model_used = ev.get("model") or route_model
+                                trade = ev.get("trade")
                 except httpx.HTTPStatusError as e:
                     if e.response.status_code == 401:
                         detail = "Invalid GROQ_API_KEY. Get a free key at https://console.groq.com"
@@ -1374,7 +1464,9 @@ async def chat_stream(req: ChatRequest, request: Request):
         macro_radar_context=radar_ctx,
     )
     vision_images = _safe_chat_images(req.images)
-    route_key, route_model = resolve_groq_route(lu, has_images=bool(vision_images))
+    route_key, route_model = resolve_groq_route(
+        lu, has_images=bool(vision_images), agent_mode=bool(req.agent_mode)
+    )
     if vision_images:
         messages = _with_vision_images(messages, vision_images)
 
@@ -1386,6 +1478,7 @@ async def chat_stream(req: ChatRequest, request: Request):
             route_model=route_model,
             memory_user_id=mem_uid,
             memory_user_text=lu,
+            agent_mode=bool(req.agent_mode),
         ),
         media_type="application/x-ndjson",
         headers={

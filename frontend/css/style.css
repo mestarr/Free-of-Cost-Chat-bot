@@ -178,6 +178,28 @@ button {
   outline: none;
 }
 
+.agent-mode-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.agent-mode-checkbox {
+  width: 0.85rem;
+  height: 0.85rem;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.agent-mode-control:has(.agent-mode-checkbox:checked) {
+  color: var(--accent);
+}
+
 .chat-toolbar-btn {
   font-family: inherit;
   font-size: 0.72rem;

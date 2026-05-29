@@ -14,7 +14,7 @@ There is **no separate frontend dev server** — `uvicorn` serves `frontend/` an
 | Path | Purpose |
 |------|---------|
 | `backend/main.py` | FastAPI app: chat, prices, news, paper outcomes; serves static `frontend/` |
-| `backend/llm_tools.py` | Groq tools (`emit_trade_analysis`, prices, headlines, macro) |
+| `backend/llm_tools.py` | Groq tools (prices, headlines, macro, F&G, on-chain, trade card) |
 | `backend/paper.py` | Paper-trade outcome scoring vs historical CoinGecko USD |
 | `backend/memory.py` | Per-user vector memory (sqlite-vec + sentence-transformers) |
 | `backend/prices.py` | CoinGecko live prices (cached), shared with chat context |
@@ -176,6 +176,16 @@ Sentiment labels in the UI are **rough keyword heuristics**, not financial analy
 
 - The UI calls **`POST /api/chat/stream`**, which streams the assistant reply as **NDJSON** (one JSON object per line: text chunks in `{"c":"..."}`, then `{"done":true,"model":"..."}`).
 - Groq and Ollama both stream; the same price and news context is injected as for `/api/chat`.
+
+## Agent mode (multi-step tool chaining)
+
+- Turn on **Agent** in the chat toolbar (saved in `localStorage` as `cryptochatpal_agent_mode`).
+- **Groq only** — requires `GROQ_API_KEY` and `LLM_TOOLS=1` (default). Ollama does not run the tool loop.
+- The model chains tools before answering, e.g. live prices → Binance funding/OI → Fear & Greed → headlines/macro → structured trade card.
+- Extra tools: `get_fear_greed`, `get_onchain_derivatives` (plus the standard price/headline/macro/trade tools).
+- Uses the **70b trade model** with up to **`LLM_AGENT_MAX_TOOL_ROUNDS`** steps (default **12**; normal chat uses **8**).
+- While thinking, the status line shows steps like `Agent: Funding & flows (step 2)` via NDJSON `{"agent_step":{...}}`.
+- Request body: `"agent_mode": true` on `/api/chat` and `/api/chat/stream`.
 
 ## Portfolio (local-first)
 

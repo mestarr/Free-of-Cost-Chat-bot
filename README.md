@@ -18,6 +18,7 @@ There is **no separate frontend dev server** — `uvicorn` serves `frontend/` an
 | `backend/paper.py` | Paper-trade outcome scoring vs historical CoinGecko USD |
 | `backend/memory.py` | Per-user vector memory (sqlite-vec + sentence-transformers) |
 | `backend/war_room.py` | Bull / Bear / Referee war-room prompts and message builders |
+| `backend/mcp_server.py` | stdio MCP server for Claude Desktop, Cursor, ChatGPT |
 | `backend/prices.py` | CoinGecko live prices (cached), shared with chat context |
 | `backend/news.py` | RSS headline aggregation (cached), shared with chat context |
 | `backend/accounts.py` | SQLite API keys (hashed) and per-day usage counters |
@@ -196,6 +197,65 @@ Sentiment labels in the UI are **rough keyword heuristics**, not financial analy
 - Referee may call `emit_trade_analysis` for structured trade output on buy/sell questions.
 - Slower (~3× API calls) but useful for trade decisions. Optional `WAR_ROOM_DEBATE_MAX_TOKENS` (default `1024`) caps bull/bear length.
 - Request body: `"war_room_mode": true`. Does not support chart image uploads yet.
+
+## MCP server (Claude Desktop, Cursor, ChatGPT)
+
+Expose the same **price / news / macro** tools to any MCP client — no Groq key needed for data tools.
+
+### Tools
+
+| Tool | Description |
+|------|-------------|
+| `get_prices` | CoinGecko USD spot + 24h change |
+| `get_crypto_headlines` | Crypto RSS headlines |
+| `get_macro_snapshot` | Oil/metals + Fed headlines |
+| `get_fear_greed` | Fear & Greed index |
+| `get_onchain_derivatives` | Binance funding, OI, positioning |
+| `get_macro_radar` | FOMC / CPI / SEC within 48h |
+
+### Run (stdio)
+
+From the project root (venv activated):
+
+```powershell
+python -m backend.mcp_server
+```
+
+Or double-click **`run_mcp.bat`** on Windows. The process speaks MCP over stdin/stdout — leave it running; the client spawns it automatically when configured.
+
+### Cursor
+
+1. **Settings → MCP → Add server** (or edit `~/.cursor/mcp.json`).
+2. Copy paths from **`mcp_config.example.json`** — set `command` to your venv Python and `cwd` to this repo.
+3. Restart Cursor; tools appear as **cryptochatpal**.
+
+Example:
+
+```json
+{
+  "mcpServers": {
+    "cryptochatpal": {
+      "command": "C:/Users/YOU/.../CryptoChatPal/venv/Scripts/python.exe",
+      "args": ["-m", "backend.mcp_server"],
+      "cwd": "C:/Users/YOU/.../CryptoChatPal"
+    }
+  }
+}
+```
+
+### Claude Desktop
+
+Edit `%APPDATA%\\Claude\\claude_desktop_config.json` with the same `mcpServers` block (use forward slashes in paths).
+
+### ChatGPT
+
+Add a **custom MCP connector** (Desktop app → Settings → Connectors) pointing at the same command + args if your plan supports local MCP.
+
+### Notes
+
+- Install deps: `pip install -r requirements.txt` (includes `mcp`).
+- Uses `.env` for optional `REDIS_URL`, cache TTLs, etc. — same as the web app.
+- **Do not** run uvicorn and debug-print inside the MCP process; stdout is the protocol stream.
 
 ## Portfolio (local-first)
 

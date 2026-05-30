@@ -1,10 +1,12 @@
-fastapi==0.115.6
+fastapi==0.136.3
 # Plain uvicorn avoids watchfiles/httptools (Rust builds) — common failure on MSYS2/mingw Python.
 uvicorn==0.32.1
 websockets==14.2
 httpx==0.28.1
 python-dotenv==1.2.2
 redis==5.2.1
+# MCP server (Claude Desktop / Cursor / ChatGPT): python -m backend.mcp_server
+mcp>=1.6.0,<2
 # Vector memory (RAG) — optional; set CCP_MEMORY_ENABLED=0 to skip
 sqlite-vec==0.1.9
 sentence-transformers==3.4.1

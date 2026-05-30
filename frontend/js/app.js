@@ -10,6 +10,9 @@
   const strategyModeSelect = document.getElementById('strategy-mode');
   const agentModeCheckbox = document.getElementById('agent-mode');
   const warRoomCheckbox = document.getElementById('war-room-mode');
+  const offlineBanner = document.getElementById('offline-banner');
+  const offlineLlmEnabled = document.getElementById('offline-llm-enabled');
+  const offlineLlmDownload = document.getElementById('offline-llm-download');
   const pricesList = document.getElementById('prices-list');
   const pricesUpdated = document.getElementById('prices-updated');
   const pricesError = document.getElementById('prices-error');
@@ -62,6 +65,8 @@
   const STRATEGY_MODE_KEY = 'cryptochatpal_strategy_mode';
   const AGENT_MODE_KEY = 'cryptochatpal_agent_mode';
   const WAR_ROOM_MODE_KEY = 'cryptochatpal_war_room_mode';
+  const OFFLINE_LLM_ENABLED_KEY = 'cryptochatpal_offline_llm_enabled';
+  const OFFLINE_MARKET_SNAP_KEY = 'cryptochatpal_offline_market_snap';
   /** Optional SaaS API key (set via localStorage when server uses CCP_AUTH_MODE=required). */
   const CCP_API_KEY_STORAGE = 'ccp_api_key';
   const MEMORY_USER_KEY = 'cryptochatpal_memory_user';
@@ -602,6 +607,7 @@
   initStrategyMode();
   initAgentMode();
   initWarRoomMode();
+  initOfflineLlm();
 
   function syncSideRailUI(btnId, railId, expandLabel, collapseLabel, iconWhenCollapsed, iconWhenExpanded) {
     const rail = document.getElementById(railId);
@@ -2561,6 +2567,7 @@
     pricesError.classList.add('hidden');
     const prevPricesPayload = lastPricesPayload;
     lastPricesPayload = data && typeof data === 'object' ? data : {};
+    cacheOfflineMarketSnapshot();
     evaluatePriceAlerts(lastPricesPayload, prevPricesPayload, Date.now());
     const orderKey = priceRows.map((r) => r.id).join('|');
     const sparkKey = Object.keys(lastSparklines).sort().join(',');
@@ -3389,6 +3396,7 @@
     newsError.classList.add('hidden');
     const items = data.items || [];
     lastNewsItems = Array.isArray(items) ? items.slice(0, 25) : [];
+    cacheOfflineMarketSnapshot();
     newsList.innerHTML = '';
     if (!items.length) {
       const p = document.createElement('p');
@@ -3728,6 +3736,236 @@
     });
   }
 
+  function getOfflineLlm() {
+    return typeof window !== 'undefined' ? window.CcpOfflineLlm : null;
+  }
+
+  function isOfflineLlmPreferred() {
+    if (offlineLlmEnabled && offlineLlmEnabled.checked) return true;
+    return typeof navigator !== 'undefined' && navigator.onLine === false;
+  }
+
+  function getOfflineMarketSnapshot() {
+    try {
+      const raw = localStorage.getItem(OFFLINE_MARKET_SNAP_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function cacheOfflineMarketSnapshot() {
+    try {
+      const snap = {
+        saved_at: new Date().toISOString(),
+        prices: lastPricesPayload,
+        news: lastNewsItems.slice(0, 18).map((it) => ({
+          source: it.source,
+          title: it.title,
+          sentiment: it.sentiment,
+        })),
+      };
+      localStorage.setItem(OFFLINE_MARKET_SNAP_KEY, JSON.stringify(snap));
+    } catch (e) {
+      /* ignore quota */
+    }
+  }
+
+  function syncOfflineBanner() {
+    if (!offlineBanner) return;
+    const llm = getOfflineLlm();
+    const online = typeof navigator !== 'undefined' && navigator.onLine !== false;
+    const ready = llm && llm.isModelReady();
+    const webGpu = llm && llm.isWebGpuSupported();
+
+    let text = '';
+    let show = false;
+    offlineBanner.classList.remove('is-offline', 'is-ready');
+
+    if (!webGpu) {
+      text = 'Offline AI needs WebGPU (Chrome or Edge desktop). Cloud chat still works when online.';
+      show = true;
+    } else if (!online) {
+      show = true;
+      offlineBanner.classList.add('is-offline');
+      if (ready) {
+        offlineBanner.classList.add('is-ready');
+        text =
+          'You are offline. Chat uses the in-browser model and cached prices/news. Live API and Groq are unavailable.';
+      } else {
+        text =
+          'You are offline. Download the offline AI model once while online (toolbar → Download AI), then chat works without network.';
+      }
+    } else if (ready && offlineLlmEnabled && offlineLlmEnabled.checked) {
+      show = true;
+      offlineBanner.classList.add('is-ready');
+      const mid = llm.getStatus().modelId || 'model';
+      text = `Offline AI active (${mid}). Cloud chat is bypassed.`;
+    } else if (ready) {
+      show = true;
+      text = 'Offline AI model is cached. Enable Offline AI or go offline to use it.';
+    }
+
+    if (show && text) {
+      offlineBanner.textContent = text;
+      offlineBanner.classList.remove('hidden');
+    } else {
+      offlineBanner.classList.add('hidden');
+    }
+  }
+
+  function initOfflineLlm() {
+    if (offlineLlmEnabled) {
+      try {
+        offlineLlmEnabled.checked = localStorage.getItem(OFFLINE_LLM_ENABLED_KEY) === '1';
+      } catch (e) {}
+      offlineLlmEnabled.addEventListener('change', () => {
+        try {
+          localStorage.setItem(OFFLINE_LLM_ENABLED_KEY, offlineLlmEnabled.checked ? '1' : '0');
+        } catch (e) {}
+        syncOfflineBanner();
+      });
+    }
+    if (offlineLlmDownload) {
+      offlineLlmDownload.addEventListener('click', () => {
+        void preloadOfflineLlmModel();
+      });
+    }
+    window.addEventListener('online', syncOfflineBanner);
+    window.addEventListener('offline', syncOfflineBanner);
+    syncOfflineBanner();
+  }
+
+  async function preloadOfflineLlmModel() {
+    const llm = getOfflineLlm();
+    const chatSaveStatus = document.getElementById('chat-save-status');
+    if (!llm) {
+      if (chatSaveStatus) chatSaveStatus.textContent = 'Offline AI script missing';
+      return;
+    }
+    if (!llm.isWebGpuSupported()) {
+      if (chatSaveStatus) chatSaveStatus.textContent = 'WebGPU not available';
+      syncOfflineBanner();
+      return;
+    }
+    if (offlineLlmDownload) offlineLlmDownload.disabled = true;
+    if (chatSaveStatus) chatSaveStatus.textContent = 'Downloading offline model…';
+    try {
+      await llm.loadModel((report) => {
+        if (chatSaveStatus && report?.text) {
+          chatSaveStatus.textContent = report.text.slice(0, 80);
+        }
+      });
+      if (chatSaveStatus) chatSaveStatus.textContent = 'Offline model ready';
+      window.setTimeout(() => {
+        if (chatSaveStatus && chatSaveStatus.textContent === 'Offline model ready') {
+          chatSaveStatus.textContent = '';
+        }
+      }, 5000);
+    } catch (err) {
+      if (chatSaveStatus) chatSaveStatus.textContent = `Offline model failed: ${err.message || err}`;
+    } finally {
+      if (offlineLlmDownload) offlineLlmDownload.disabled = false;
+      syncOfflineBanner();
+    }
+  }
+
+  function shouldUseOfflineChat({ hasImages } = {}) {
+    if (hasImages) return false;
+    if (getWarRoomMode() || getAgentMode()) return false;
+    const llm = getOfflineLlm();
+    if (!llm || !llm.isWebGpuSupported()) return false;
+    if (!isOfflineLlmPreferred()) return false;
+    return true;
+  }
+
+  async function runOfflineChatPipeline({
+    displayUser,
+    storedUserContent,
+    apiUserContent,
+    clearAttachmentsOnSuccess = true,
+  }) {
+    const llm = getOfflineLlm();
+    if (!llm) return false;
+
+    addMessage('user', displayUser);
+    conversation.push({ role: 'user', content: storedUserContent });
+    persistChatSessions();
+
+    const botDiv = addMessage('assistant', '');
+    botDiv.classList.add('offline-reply');
+    setTyping(botDiv, true);
+    sendBtn.disabled = true;
+    if (chatAttachBtn) chatAttachBtn.disabled = true;
+    setWhyMoveBusy(true);
+
+    const chatSaveStatus = document.getElementById('chat-save-status');
+    try {
+      if (!llm.isModelReady()) {
+        if (chatSaveStatus) chatSaveStatus.textContent = 'Loading offline model…';
+        await llm.loadModel((report) => {
+          if (chatSaveStatus && report?.text) chatSaveStatus.textContent = report.text.slice(0, 72);
+        });
+      }
+
+      const history = conversation.slice(0, -1).map((m) => ({
+        role: m.role === 'assistant' ? 'assistant' : 'user',
+        content: m.content || '',
+      }));
+      history.push({ role: 'user', content: apiUserContent || storedUserContent || displayUser });
+
+      let full = '';
+      setTyping(botDiv, false);
+      botDiv.classList.add('streaming');
+
+      await llm.chatStream({
+        messages: history,
+        marketSnapshot: getOfflineMarketSnapshot(),
+        onDelta: (text) => {
+          full = text;
+          botDiv.querySelector('.content').innerHTML = formatContent(full);
+          scrollChatToBottom();
+        },
+      });
+
+      botDiv.classList.remove('streaming');
+      const reply = full.trim() || '(No text returned.)';
+      botDiv.querySelector('.content').innerHTML = formatContent(reply);
+      conversation.push({ role: 'assistant', content: reply });
+      persistChatSessions();
+      ensureMsgSpeakActions(botDiv, reply);
+      if (isVoiceAutoReadEnabled() && reply) speakPlainText(reply);
+      if (clearAttachmentsOnSuccess) {
+        pendingAttachments = [];
+        renderAttachChips();
+        setAttachStatus('');
+      }
+      if (chatSaveStatus) {
+        chatSaveStatus.textContent = 'Offline AI';
+        window.setTimeout(() => {
+          if (chatSaveStatus.textContent === 'Offline AI') chatSaveStatus.textContent = '';
+        }, 4000);
+      }
+      return true;
+    } catch (err) {
+      setTyping(botDiv, false);
+      botDiv.classList.remove('streaming');
+      botDiv.querySelector('.content').innerHTML = formatContent(
+        (err && err.message) ||
+          'Offline AI failed. Connect once, click Download AI, then retry offline.'
+      );
+      botDiv.classList.add('error');
+      return true;
+    } finally {
+      sendBtn.disabled = false;
+      if (chatAttachBtn) chatAttachBtn.disabled = false;
+      syncVoiceToolbarButtons();
+      setWhyMoveBusy(false);
+      syncOfflineBanner();
+    }
+  }
+
   async function runChatPipeline({
     displayUser,
     storedUserContent,
@@ -3738,6 +3976,17 @@
     if (!messagesEl || !form || !sendBtn) return;
     stopVoiceListening();
     stopSpeaking();
+
+    if (shouldUseOfflineChat({ hasImages: images && images.length > 0 })) {
+      const used = await runOfflineChatPipeline({
+        displayUser,
+        storedUserContent,
+        apiUserContent,
+        clearAttachmentsOnSuccess,
+      });
+      if (used) return;
+    }
+
     addMessage('user', displayUser);
     conversation.push({ role: 'user', content: storedUserContent });
     persistChatSessions();
@@ -3932,10 +4181,28 @@
         setAttachStatus('');
       }
     } catch (err) {
+      const llm = getOfflineLlm();
+      const canFallback =
+        llm &&
+        llm.isWebGpuSupported() &&
+        !images.length &&
+        !getWarRoomMode() &&
+        !getAgentMode();
+      if (canFallback) {
+        conversation.pop();
+        if (botDiv.parentNode) botDiv.remove();
+        const ok = await runOfflineChatPipeline({
+          displayUser,
+          storedUserContent,
+          apiUserContent,
+          clearAttachmentsOnSuccess,
+        });
+        if (ok) return;
+      }
       setTyping(botDiv, false);
       botDiv.classList.remove('streaming');
       botDiv.querySelector('.content').innerHTML = formatContent(
-        'Network error. Is the server running? Check your API key (Groq) or Ollama.'
+        'Network error. Is the server running? Check your API key (Groq) or Ollama — or enable Offline AI and download the model.'
       );
       botDiv.classList.add('error');
     } finally {
@@ -4251,7 +4518,9 @@
   window.addEventListener('online', () => {
     sendLiveSubscribe();
     if (liveFeedMode !== 'live') loadPrices();
+    syncOfflineBanner();
   });
+  window.addEventListener('offline', syncOfflineBanner);
 
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {

@@ -90,6 +90,7 @@
       <button type="button" id="theme-dark" class="theme-btn" aria-pressed="true">Dark</button>
     </div>
   </header>
+  <div id="offline-banner" class="offline-banner hidden" role="status" aria-live="polite"></div>
 
   <div class="layout">
     <div class="side-rail side-rail--left" id="side-rail-left">
@@ -297,6 +298,13 @@
           <input type="checkbox" id="war-room-mode" class="war-room-checkbox" />
           <span>War room</span>
         </label>
+        <label class="offline-llm-control" for="offline-llm-enabled" title="Use in-browser WebLLM when offline or when cloud chat is unavailable (WebGPU)">
+          <input type="checkbox" id="offline-llm-enabled" class="offline-llm-checkbox" />
+          <span>Offline AI</span>
+        </label>
+        <button type="button" id="offline-llm-download" class="chat-toolbar-btn" title="Download WebLLM model once (~1 GB); cached for offline use">
+          Download AI
+        </button>
         <button type="button" id="chat-save" class="chat-toolbar-btn">Save</button>
         <button type="button" id="chat-new" class="chat-toolbar-btn">New chat</button>
         <button
@@ -699,6 +707,7 @@
     </script>
   </div>
 
-  <script src="js/app.js?v=20260519-war-room" defer></script>
+  <script src="js/offline-llm.js?v=20260520-offline" defer></script>
+  <script src="js/app.js?v=20260520-offline" defer></script>
 </body>
 </html>

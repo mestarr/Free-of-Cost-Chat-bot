@@ -1360,6 +1360,18 @@
     }
   }
 
+  const TRADE_DISCLAIMER =
+    'Disclaimer: Educational analysis only — not financial advice. Crypto is high risk; AI can be wrong. Do your own research before investing.';
+
+  function ensureMsgDisclaimer(botDiv) {
+    if (!botDiv || botDiv.querySelector('.msg-disclaimer')) return;
+    const el = document.createElement('div');
+    el.className = 'msg-disclaimer';
+    el.setAttribute('role', 'note');
+    el.textContent = TRADE_DISCLAIMER;
+    botDiv.appendChild(el);
+  }
+
   function renderTradeCard(botDiv, trade) {
     if (!trade || typeof trade !== 'object') return;
     let card = botDiv.querySelector('.trade-card');
@@ -1392,7 +1404,9 @@
       ${trade.thesis ? `<div class="trade-card-thesis">${escapeHtml(String(trade.thesis))}</div>` : ''}
       ${riskHtml}
       ${trade.what_changes_view ? `<div class="trade-card-change">${escapeHtml(String(trade.what_changes_view))}</div>` : ''}
+      <div class="trade-card-disclaimer">${escapeHtml(TRADE_DISCLAIMER)}</div>
     `;
+    ensureMsgDisclaimer(botDiv);
   }
 
   function computeSessionPulse() {

@@ -380,6 +380,14 @@
         <div id="chat-history-list" class="chat-history-list"></div>
       </div>
       <div class="messages-scroll">
+        <div id="chat-disclaimer" class="chat-disclaimer-notice" role="note" aria-label="Disclaimer">
+          <p>
+            <strong>Not financial advice</strong> — educational information only.
+            Crypto is high risk; AI can be wrong. You decide — DYOR.
+            Stjepan Paun is not a licensed financial adviser.
+            <span lang="de">Keine Anlageberatung.</span>
+          </p>
+        </div>
         <div id="messages"></div>
       </div>
       <div id="input-area">
@@ -706,6 +714,15 @@
       })();
     </script>
   </div>
+
+  <footer class="app-disclaimer" role="contentinfo">
+    <p>
+      <strong>Not financial advice.</strong>
+      For education and information only. Crypto is high risk; AI can be wrong.
+      Stjepan Paun is not a licensed financial adviser. You are responsible for your own decisions.
+      <a href="https://github.com/mestarr/CryptoChatPal/blob/main/DISCLAIMER.md" target="_blank" rel="noopener noreferrer">Full disclaimer (EN/DE)</a>
+    </p>
+  </footer>
 
   <script src="js/offline-llm.js?v=20260520-offline" defer></script>
   <script src="js/app.js?v=20260520-offline" defer></script>

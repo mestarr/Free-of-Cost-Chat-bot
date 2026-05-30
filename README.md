@@ -1,8 +1,12 @@
 # Crypto ChatPal
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A **free**, crypto-focused AI chatbot with a web UI, **live USD spot prices** (CoinGecko), and **headlines from crypto RSS feeds** (CoinDesk, Decrypt, BeInCrypto). The brain uses either **Groq** (free cloud, no local install) or **Ollama** (fully local).
 
 There is **no separate frontend dev server** — `uvicorn` serves `frontend/` and the API on **http://127.0.0.1:8000**.
+
+> **Disclaimer:** Crypto ChatPal is for education and information only — **not financial advice**. AI outputs can be wrong; crypto is high risk. **Stjepan Paun** is not a licensed financial adviser and is not liable for trading losses. See **[DISCLAIMER.md](DISCLAIMER.md)** (English + Deutsch).
 
 ## What you need
 

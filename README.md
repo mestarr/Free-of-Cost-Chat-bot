@@ -17,6 +17,7 @@ There is **no separate frontend dev server** — `uvicorn` serves `frontend/` an
 | `backend/llm_tools.py` | Groq tools (prices, headlines, macro, F&G, on-chain, trade card) |
 | `backend/paper.py` | Paper-trade outcome scoring vs historical CoinGecko USD |
 | `backend/memory.py` | Per-user vector memory (sqlite-vec + sentence-transformers) |
+| `backend/war_room.py` | Bull / Bear / Referee war-room prompts and message builders |
 | `backend/prices.py` | CoinGecko live prices (cached), shared with chat context |
 | `backend/news.py` | RSS headline aggregation (cached), shared with chat context |
 | `backend/accounts.py` | SQLite API keys (hashed) and per-day usage counters |
@@ -186,6 +187,15 @@ Sentiment labels in the UI are **rough keyword heuristics**, not financial analy
 - Uses the **70b trade model** with up to **`LLM_AGENT_MAX_TOOL_ROUNDS`** steps (default **12**; normal chat uses **8**).
 - While thinking, the status line shows steps like `Agent: Funding & flows (step 2)` via NDJSON `{"agent_step":{...}}`.
 - Request body: `"agent_mode": true` on `/api/chat` and `/api/chat/stream`.
+
+## War room (multi-agent debate)
+
+- Turn on **War room** in the chat toolbar (mutually exclusive with **Agent**; saved as `cryptochatpal_war_room_mode`).
+- **Groq only** — runs three calls: **Bull** and **Bear** in parallel (8b, injected context), then **Referee** (70b) synthesizes the final answer.
+- UI shows a **3-panel view**: Bull | Bear on top, Referee final answer below (also in the main reply area).
+- Referee may call `emit_trade_analysis` for structured trade output on buy/sell questions.
+- Slower (~3× API calls) but useful for trade decisions. Optional `WAR_ROOM_DEBATE_MAX_TOKENS` (default `1024`) caps bull/bear length.
+- Request body: `"war_room_mode": true`. Does not support chart image uploads yet.
 
 ## Portfolio (local-first)
 

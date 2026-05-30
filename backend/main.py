@@ -50,6 +50,11 @@ from .realtime import router as realtime_router
 from .redis_cache import close_client
 from .redis_cache import ping as redis_ping
 from .saas_middleware import TenantMiddleware
+from .war_room import (
+    build_debate_messages,
+    build_referee_messages,
+    format_stored_assistant_text,
+)
 
 # Load project-root .env (same folder as backend/)
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -97,6 +102,11 @@ try:
     LLM_AGENT_MAX_TOOL_ROUNDS = max(LLM_MAX_TOOL_ROUNDS, min(16, int(_llm_agent_rounds_raw)))
 except ValueError:
     LLM_AGENT_MAX_TOOL_ROUNDS = max(LLM_MAX_TOOL_ROUNDS, 12)
+_war_debate_tokens_raw = os.getenv("WAR_ROOM_DEBATE_MAX_TOKENS", "1024").strip()
+try:
+    WAR_ROOM_DEBATE_MAX_TOKENS = max(256, min(4096, int(_war_debate_tokens_raw)))
+except ValueError:
+    WAR_ROOM_DEBATE_MAX_TOKENS = 1024
 
 # Groq free/on-demand tiers often cap a single request at ~6000 tokens (prompt + max_tokens + tool schemas).
 # Default completion cap stays well below LLM_MAX_TOKENS so prompt + requested output fits.
@@ -268,6 +278,10 @@ class ChatRequest(BaseModel):
         default=False,
         description="When true, use extended tools and deeper tool chaining for complex analysis.",
     )
+    war_room_mode: bool = Field(
+        default=False,
+        description="When true, run Bull/Bear debate then Referee synthesis (Groq only).",
+    )
 
 
 class ChatResponse(BaseModel):
@@ -275,6 +289,7 @@ class ChatResponse(BaseModel):
     model: str
     trade: dict | None = None
     route: str | None = None
+    war_room: dict | None = None
 
 
 STRATEGY_MODE_PROMPTS = {
@@ -550,15 +565,18 @@ def resolve_groq_route(
     *,
     has_images: bool = False,
     agent_mode: bool = False,
+    war_room_mode: bool = False,
 ) -> tuple[str, str]:
     """
     Pick Groq model bucket for this turn.
-    Returns (route_key, model_id): vision | agent | trade | fast.
+    Returns (route_key, model_id): vision | war_room | agent | trade | fast.
     """
     if has_images:
         return "vision", GROQ_VISION_MODEL
     if not GROQ_MODEL_ROUTING:
         return "default", GROQ_MODEL
+    if war_room_mode and not _groq_short_format_turn(user_text):
+        return "war_room", GROQ_TRADE_MODEL
     if agent_mode and not _groq_short_format_turn(user_text):
         return "agent", GROQ_TRADE_MODEL
     if _groq_short_format_turn(user_text):
@@ -877,6 +895,88 @@ async def _groq_post_chat_completion(client: httpx.AsyncClient, payload: dict) -
         await asyncio.sleep(wait)
         backoff = min(backoff * 1.75, 45.0)
     return last  # type: ignore[return-value]
+
+
+async def _groq_simple_complete(
+    client: httpx.AsyncClient,
+    messages: list[dict],
+    *,
+    model: str,
+    max_tokens: int | None = None,
+) -> tuple[str, str]:
+    """Single Groq completion without tools."""
+    msgs = _trim_messages_for_groq(_compress_assistant_turns_for_groq(_apply_groq_history_cap([dict(x) for x in messages])))
+    cap = max_tokens if max_tokens is not None else _groq_completion_cap(False)
+    payload: dict = {
+        "model": model,
+        "messages": msgs,
+        "temperature": LLM_TEMPERATURE,
+        "max_tokens": cap,
+    }
+    active = model
+    r = await _groq_post_chat_completion(client, payload)
+    if r.status_code == 429 and _groq_is_daily_quota_429(r) and active != _GROQ_FALLBACK_MODEL:
+        active = _GROQ_FALLBACK_MODEL
+        payload["model"] = active
+        payload["max_tokens"] = min(cap, 1024)
+        r = await _groq_post_chat_completion(client, payload)
+    r.raise_for_status()
+    data = r.json()
+    model_out = data.get("model") or active
+    content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+    return content.strip(), model_out
+
+
+async def _war_room_stream_events(
+    client: httpx.AsyncClient,
+    messages: list[dict],
+) -> AsyncIterator[dict]:
+    """Yield war_room_status, war_room panels, then referee done event."""
+    bull_msgs = build_debate_messages(messages, "bull")
+    bear_msgs = build_debate_messages(messages, "bear")
+
+    yield {"event": "war_room_status", "agent": "bull", "state": "running"}
+    yield {"event": "war_room_status", "agent": "bear", "state": "running"}
+
+    bull_task = asyncio.create_task(
+        _groq_simple_complete(
+            client, bull_msgs, model=GROQ_FAST_MODEL, max_tokens=WAR_ROOM_DEBATE_MAX_TOKENS
+        )
+    )
+    bear_task = asyncio.create_task(
+        _groq_simple_complete(
+            client, bear_msgs, model=GROQ_FAST_MODEL, max_tokens=WAR_ROOM_DEBATE_MAX_TOKENS
+        )
+    )
+    bull_text, _bull_model = await bull_task
+    yield {"event": "war_room", "agent": "bull", "content": bull_text}
+
+    bear_text, _bear_model = await bear_task
+    yield {"event": "war_room", "agent": "bear", "content": bear_text}
+
+    referee_msgs = build_referee_messages(messages, bull_text, bear_text)
+    yield {"event": "war_room_status", "agent": "referee", "state": "running"}
+
+    content = ""
+    model_out = GROQ_TRADE_MODEL
+    trade_card: dict | None = None
+    async for ev in _groq_multistep_events(
+        client, referee_msgs, primary_model=GROQ_TRADE_MODEL, agent_mode=False
+    ):
+        if ev.get("event") == "agent_step":
+            yield {"event": "agent_step", "tool": ev.get("tool"), "round": ev.get("round")}
+        elif ev.get("event") == "done":
+            content = ev.get("content") or ""
+            model_out = ev.get("model") or GROQ_TRADE_MODEL
+            trade_card = ev.get("trade")
+
+    yield {
+        "event": "done",
+        "content": content,
+        "model": model_out,
+        "trade": trade_card,
+        "war_room": {"bull": bull_text, "bear": bear_text, "referee": content},
+    }
 
 
 async def _groq_complete_vision(client: httpx.AsyncClient, messages: list[dict]) -> tuple[str, str]:
@@ -1212,12 +1312,19 @@ async def chat(req: ChatRequest, request: Request):
     )
     vision_images = _safe_chat_images(req.images)
     route_key, route_model = resolve_groq_route(
-        lu, has_images=bool(vision_images), agent_mode=bool(req.agent_mode)
+        lu,
+        has_images=bool(vision_images),
+        agent_mode=bool(req.agent_mode),
+        war_room_mode=bool(req.war_room_mode),
     )
     if vision_images:
         if not USE_GROQ:
             raise HTTPException(status_code=400, detail="Chart image analysis requires GROQ_API_KEY.")
         messages = _with_vision_images(messages, vision_images)
+    if req.war_room_mode and vision_images:
+        raise HTTPException(status_code=400, detail="War room does not support chart images yet.")
+    if req.war_room_mode and not USE_GROQ:
+        raise HTTPException(status_code=400, detail="War room requires GROQ_API_KEY.")
 
     if USE_GROQ:
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -1225,6 +1332,31 @@ async def chat(req: ChatRequest, request: Request):
                 if vision_images:
                     content, model_used = await _groq_complete_vision(client, messages)
                     return ChatResponse(message=content, model=model_used, route=route_key)
+                if req.war_room_mode:
+                    content = ""
+                    model_used = route_model
+                    trade = None
+                    war_payload: dict | None = None
+                    async for ev in _war_room_stream_events(client, messages):
+                        if ev.get("event") == "done":
+                            content = ev.get("content") or ""
+                            model_used = ev.get("model") or route_model
+                            trade = ev.get("trade")
+                            war_payload = ev.get("war_room")
+                    if mem_uid and content:
+                        stored = format_stored_assistant_text(
+                            (war_payload or {}).get("bull") or "",
+                            (war_payload or {}).get("bear") or "",
+                            content,
+                        )
+                        await asyncio.to_thread(ingest_turn, mem_uid, lu, stored)
+                    return ChatResponse(
+                        message=content,
+                        model=model_used,
+                        trade=trade,
+                        route=route_key,
+                        war_room=war_payload,
+                    )
                 content, model_used, trade = await _groq_complete_multistep(
                     client, messages, primary_model=route_model, agent_mode=bool(req.agent_mode)
                 )
@@ -1278,6 +1410,7 @@ async def _stream_chat_ndjson(
     memory_user_id: str | None = None,
     memory_user_text: str = "",
     agent_mode: bool = False,
+    war_room_mode: bool = False,
 ) -> AsyncIterator[bytes]:
     """Yield NDJSON lines: {"c":"chunk"} text deltas, then {"done":true,"model":...} or {"error":"..."}."""
     assistant_reply: list[str] = []
@@ -1286,15 +1419,58 @@ async def _stream_chat_ndjson(
             if vision and not USE_GROQ:
                 yield _ndjson_line({"error": "Chart image analysis requires GROQ_API_KEY."})
                 return
+            if war_room_mode and not USE_GROQ:
+                yield _ndjson_line({"error": "War room requires GROQ_API_KEY (Bull/Bear/Referee use Groq cloud)."})
+                return
             if USE_GROQ:
                 try:
                     if vision:
                         content, model_used = await _groq_complete_vision(client, messages)
                         trade = None
+                        war_payload = None
+                    elif war_room_mode:
+                        content = ""
+                        model_used = route_model
+                        trade = None
+                        war_payload = None
+                        async for ev in _war_room_stream_events(client, messages):
+                            if ev.get("event") == "war_room_status":
+                                yield _ndjson_line(
+                                    {
+                                        "war_room_status": {
+                                            "agent": ev.get("agent"),
+                                            "state": ev.get("state"),
+                                        }
+                                    }
+                                )
+                            elif ev.get("event") == "war_room":
+                                yield _ndjson_line(
+                                    {
+                                        "war_room": {
+                                            "agent": ev.get("agent"),
+                                            "content": ev.get("content"),
+                                        }
+                                    }
+                                )
+                            elif ev.get("event") == "agent_step":
+                                yield _ndjson_line(
+                                    {
+                                        "agent_step": {
+                                            "tool": ev.get("tool"),
+                                            "round": ev.get("round"),
+                                        }
+                                    }
+                                )
+                            elif ev.get("event") == "done":
+                                content = ev.get("content") or ""
+                                model_used = ev.get("model") or route_model
+                                trade = ev.get("trade")
+                                war_payload = ev.get("war_room")
                     else:
                         content = ""
                         model_used = route_model
                         trade = None
+                        war_payload = None
                         async for ev in _groq_multistep_events(
                             client,
                             messages,
@@ -1332,9 +1508,21 @@ async def _stream_chat_ndjson(
                 else:
                     for i in range(0, len(content), chunk_size):
                         yield _ndjson_line({"c": content[i : i + chunk_size]})
-                yield _ndjson_line({"done": True, "model": model_used, "route": route_key, "trade": trade})
+                done_obj: dict = {"done": True, "model": model_used, "route": route_key, "trade": trade}
+                if war_room_mode and war_payload:
+                    done_obj["war_room"] = war_payload
+                yield _ndjson_line(done_obj)
                 if content:
-                    assistant_reply.append(content)
+                    if war_room_mode and war_payload:
+                        assistant_reply.append(
+                            format_stored_assistant_text(
+                                war_payload.get("bull") or "",
+                                war_payload.get("bear") or "",
+                                content,
+                            )
+                        )
+                    else:
+                        assistant_reply.append(content)
             else:
                 model_out = OLLAMA_MODEL
                 ollama_parts: list[str] = []
@@ -1465,8 +1653,15 @@ async def chat_stream(req: ChatRequest, request: Request):
     )
     vision_images = _safe_chat_images(req.images)
     route_key, route_model = resolve_groq_route(
-        lu, has_images=bool(vision_images), agent_mode=bool(req.agent_mode)
+        lu,
+        has_images=bool(vision_images),
+        agent_mode=bool(req.agent_mode),
+        war_room_mode=bool(req.war_room_mode),
     )
+    if req.war_room_mode and vision_images:
+        raise HTTPException(status_code=400, detail="War room does not support chart images yet.")
+    if req.war_room_mode and not USE_GROQ:
+        raise HTTPException(status_code=400, detail="War room requires GROQ_API_KEY.")
     if vision_images:
         messages = _with_vision_images(messages, vision_images)
 
@@ -1479,6 +1674,7 @@ async def chat_stream(req: ChatRequest, request: Request):
             memory_user_id=mem_uid,
             memory_user_text=lu,
             agent_mode=bool(req.agent_mode),
+            war_room_mode=bool(req.war_room_mode),
         ),
         media_type="application/x-ndjson",
         headers={

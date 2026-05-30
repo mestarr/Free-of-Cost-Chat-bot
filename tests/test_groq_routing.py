@@ -31,3 +31,15 @@ def test_agent_mode_uses_trade_model():
 def test_agent_mode_yields_to_short_format():
     route, _ = resolve_groq_route("yes or no only", agent_mode=True)
     assert route == "fast"
+
+
+def test_war_room_route():
+    route, _model = resolve_groq_route("Should I buy BTC?", war_room_mode=True)
+    assert route == "war_room"
+
+
+def test_war_room_beats_agent_when_both_requested():
+    route, _ = resolve_groq_route(
+        "Should I buy BTC?", agent_mode=True, war_room_mode=True
+    )
+    assert route == "war_room"

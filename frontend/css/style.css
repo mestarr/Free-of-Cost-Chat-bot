@@ -200,6 +200,98 @@ button {
   color: var(--accent);
 }
 
+.war-room-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.war-room-checkbox {
+  width: 0.85rem;
+  height: 0.85rem;
+  accent-color: #e8a838;
+  cursor: pointer;
+}
+
+.war-room-control:has(.war-room-checkbox:checked) {
+  color: #e8a838;
+}
+
+.msg.war-room-msg .war-room {
+  margin-bottom: 0.75rem;
+}
+
+.war-room-debate {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem;
+  margin-bottom: 0.55rem;
+}
+
+@media (max-width: 640px) {
+  .war-room-debate {
+    grid-template-columns: 1fr;
+  }
+}
+
+.war-room-panel {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+  min-height: 3.5rem;
+}
+
+[data-theme='light'] .war-room-panel {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.war-room-panel-head {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.35rem 0.55rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.war-room-panel--bull .war-room-panel-head {
+  color: #3dd68c;
+  background: rgba(61, 214, 140, 0.08);
+}
+
+.war-room-panel--bear .war-room-panel-head {
+  color: #ff6b7a;
+  background: rgba(255, 107, 122, 0.08);
+}
+
+.war-room-panel--referee .war-room-panel-head {
+  color: #e8a838;
+  background: rgba(232, 168, 56, 0.1);
+}
+
+.war-room-panel-body {
+  padding: 0.5rem 0.6rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.war-room-panel-body.typing::after {
+  content: '…';
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.war-room-panel--referee .war-room-panel-body {
+  max-height: none;
+}
+
 .chat-toolbar-btn {
   font-family: inherit;
   font-size: 0.72rem;

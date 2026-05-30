@@ -23,7 +23,7 @@ from .accounts import init_db as init_accounts_db
 from .admin_routes import me_router
 from .admin_routes import router as admin_router
 from .fng import fetch_fear_greed_json
-from .llm_tools import execute_tool, groq_tools_for_mode, normalize_trade_card
+from .llm_tools import GROQ_TOOLS, execute_tool, groq_tools_for_mode, normalize_trade_card
 from .macro_radar import fetch_macro_radar_json, format_radar_context
 from .memory import (
     MEMORY_ENABLED,

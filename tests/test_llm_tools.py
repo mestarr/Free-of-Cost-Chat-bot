@@ -8,9 +8,9 @@ import pytest
 from backend.llm_tools import (
     GROQ_AGENT_TOOLS,
     GROQ_TOOLS,
+    _slim_onchain_tool_payload,
     execute_tool,
     groq_tools_for_mode,
-    _slim_onchain_tool_payload,
 )
 
 

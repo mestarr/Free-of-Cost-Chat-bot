@@ -518,6 +518,60 @@ button {
   color: var(--accent);
 }
 
+.offline-banner {
+  margin: 0 1rem 0.35rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 212, 170, 0.35);
+  background: rgba(0, 212, 170, 0.08);
+  font-size: 0.72rem;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.offline-banner.hidden {
+  display: none;
+}
+
+.offline-banner.is-offline {
+  border-color: rgba(255, 193, 7, 0.45);
+  background: rgba(255, 193, 7, 0.1);
+}
+
+.offline-banner.is-ready {
+  border-color: rgba(0, 212, 170, 0.45);
+}
+
+.offline-llm-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.offline-llm-checkbox {
+  width: 0.85rem;
+  height: 0.85rem;
+  accent-color: #6eb5ff;
+  cursor: pointer;
+}
+
+.offline-llm-control:has(.offline-llm-checkbox:checked) {
+  color: #6eb5ff;
+}
+
+.msg.offline-reply .role::after {
+  content: ' · offline';
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: #6eb5ff;
+  margin-left: 0.35rem;
+}
+
 .macro-radar-banners {
   margin: 0 1rem 0.5rem;
   padding: 0.65rem 0.75rem;

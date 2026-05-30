@@ -28,6 +28,8 @@ There is **no separate frontend dev server** — `uvicorn` serves `frontend/` an
 | `frontend/index.html` | Page structure only |
 | `frontend/css/style.css` | Layout and visual design |
 | `frontend/js/app.js` | Chat + prices + news panel behavior |
+| `frontend/js/offline-llm.js` | WebLLM wrapper for offline in-browser chat |
+| `frontend/sw.js` | PWA service worker (shell precache) |
 | `requirements.txt` | Python dependencies |
 | `docker-compose.yml` | Optional Redis (`--profile cache`) + named volume for `.data` (accounts DB) |
 | `.env` / `.env.example` | Groq/Ollama, optional `REDIS_URL`, optional `CCP_*` tenant settings |
@@ -256,6 +258,30 @@ Add a **custom MCP connector** (Desktop app → Settings → Connectors) pointin
 - Install deps: `pip install -r requirements.txt` (includes `mcp`).
 - Uses `.env` for optional `REDIS_URL`, cache TTLs, etc. — same as the web app.
 - **Do not** run uvicorn and debug-print inside the MCP process; stdout is the protocol stream.
+
+## Offline PWA + in-browser AI (WebLLM)
+
+The app is a **PWA** (`manifest.json` + `sw.js`). The service worker precaches the UI shell so the page loads without network after one visit.
+
+### Offline chat (WebGPU)
+
+- Toolbar **Offline AI** — use the in-browser model instead of Groq/Ollama when checked, or automatically when the browser is offline.
+- **Download AI** — one-time download of **Llama-3.2-1B** (~1 GB, WebLLM via CDN); falls back to **SmolLM2-360M** on low memory. Weights stay in the browser cache for later offline use.
+- Requires **Chrome or Edge** with **WebGPU**. Not a replacement for cloud trade tools / war room / vision — offline chat is text-only with cached market context.
+- Last **prices** and **headlines** are saved to `localStorage` (`cryptochatpal_offline_market_snap`) whenever the live panels update.
+
+### First-time setup
+
+1. Open the app **while online**.
+2. Click **Download AI** and wait for the progress line in the toolbar to finish.
+3. Use the app normally once (prices/news cache fills).
+4. Go offline (or enable **Offline AI**) and chat still works for general crypto Q&A with stale cached numbers.
+
+### Limits
+
+- First visit still needs network (WebLLM library + model weights from CDN).
+- No live prices, news, or API tools while fully offline unless previously cached in the UI.
+- Agent mode, war room, chart vision, and MCP require network + server.
 
 ## Portfolio (local-first)
 

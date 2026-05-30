@@ -9,6 +9,7 @@
   const chatAttachStatus = document.getElementById('chat-attach-status');
   const strategyModeSelect = document.getElementById('strategy-mode');
   const agentModeCheckbox = document.getElementById('agent-mode');
+  const warRoomCheckbox = document.getElementById('war-room-mode');
   const pricesList = document.getElementById('prices-list');
   const pricesUpdated = document.getElementById('prices-updated');
   const pricesError = document.getElementById('prices-error');
@@ -60,6 +61,7 @@
   const WIDGET_COLLAPSE_PREFIX = 'cryptochatpal_widget_';
   const STRATEGY_MODE_KEY = 'cryptochatpal_strategy_mode';
   const AGENT_MODE_KEY = 'cryptochatpal_agent_mode';
+  const WAR_ROOM_MODE_KEY = 'cryptochatpal_war_room_mode';
   /** Optional SaaS API key (set via localStorage when server uses CCP_AUTH_MODE=required). */
   const CCP_API_KEY_STORAGE = 'ccp_api_key';
   const MEMORY_USER_KEY = 'cryptochatpal_memory_user';
@@ -131,6 +133,71 @@
 
   function getAgentMode() {
     return Boolean(agentModeCheckbox && agentModeCheckbox.checked);
+  }
+
+  function getWarRoomMode() {
+    return Boolean(warRoomCheckbox && warRoomCheckbox.checked);
+  }
+
+  function syncAnalysisModeControls(changed) {
+    if (changed === 'war' && getWarRoomMode() && agentModeCheckbox) {
+      agentModeCheckbox.checked = false;
+      try {
+        localStorage.setItem(AGENT_MODE_KEY, '0');
+      } catch (e) {}
+    }
+    if (changed === 'agent' && getAgentMode() && warRoomCheckbox) {
+      warRoomCheckbox.checked = false;
+      try {
+        localStorage.setItem(WAR_ROOM_MODE_KEY, '0');
+      } catch (e) {}
+    }
+  }
+
+  function formatWarRoomStatus(status) {
+    if (!status || typeof status !== 'object') return 'War room…';
+    const labels = { bull: 'Bull', bear: 'Bear', referee: 'Referee' };
+    const name = labels[String(status.agent || '').toLowerCase()] || 'Analyst';
+    return `War room: ${name} thinking…`;
+  }
+
+  function ensureWarRoomPanel(botDiv) {
+    let panel = botDiv.querySelector('.war-room');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.className = 'war-room';
+      panel.innerHTML = `
+        <div class="war-room-debate">
+          <div class="war-room-panel war-room-panel--bull" data-agent="bull">
+            <div class="war-room-panel-head">Bull</div>
+            <div class="war-room-panel-body typing"></div>
+          </div>
+          <div class="war-room-panel war-room-panel--bear" data-agent="bear">
+            <div class="war-room-panel-head">Bear</div>
+            <div class="war-room-panel-body typing"></div>
+          </div>
+        </div>
+        <div class="war-room-panel war-room-panel--referee" data-agent="referee">
+          <div class="war-room-panel-head">Referee — final answer</div>
+          <div class="war-room-panel-body"></div>
+        </div>
+      `;
+      const content = botDiv.querySelector('.content');
+      if (content) botDiv.insertBefore(panel, content);
+      else botDiv.appendChild(panel);
+      botDiv.classList.add('war-room-msg');
+    }
+    return panel;
+  }
+
+  function updateWarRoomPanel(botDiv, agent, text, { typing = false } = {}) {
+    const panel = ensureWarRoomPanel(botDiv);
+    const slot = panel.querySelector(`[data-agent="${agent}"] .war-room-panel-body`);
+    if (!slot) return;
+    slot.classList.toggle('typing', Boolean(typing));
+    if (text != null && String(text).trim()) {
+      slot.innerHTML = formatContent(String(text));
+    }
   }
 
   const AGENT_TOOL_LABELS = {
@@ -482,6 +549,7 @@
     const labels = {
       vision: 'Vision',
       agent: 'Agent (70b)',
+      war_room: 'War room (70b)',
       trade: 'Trade (70b)',
       fast: 'Fast (8b)',
       default: 'Default',
@@ -512,13 +580,28 @@
       agentModeCheckbox.checked = localStorage.getItem(AGENT_MODE_KEY) === '1';
     } catch (e) {}
     agentModeCheckbox.addEventListener('change', () => {
+      syncAnalysisModeControls('agent');
       try {
         localStorage.setItem(AGENT_MODE_KEY, getAgentMode() ? '1' : '0');
       } catch (e) {}
     });
   }
+
+  function initWarRoomMode() {
+    if (!warRoomCheckbox) return;
+    try {
+      warRoomCheckbox.checked = localStorage.getItem(WAR_ROOM_MODE_KEY) === '1';
+    } catch (e) {}
+    warRoomCheckbox.addEventListener('change', () => {
+      syncAnalysisModeControls('war');
+      try {
+        localStorage.setItem(WAR_ROOM_MODE_KEY, getWarRoomMode() ? '1' : '0');
+      } catch (e) {}
+    });
+  }
   initStrategyMode();
   initAgentMode();
+  initWarRoomMode();
 
   function syncSideRailUI(btnId, railId, expandLabel, collapseLabel, iconWhenCollapsed, iconWhenExpanded) {
     const rail = document.getElementById(railId);
@@ -3665,6 +3748,9 @@
     ];
 
     const botDiv = addMessage('assistant', '');
+    if (getWarRoomMode()) {
+      ensureWarRoomPanel(botDiv);
+    }
     setTyping(botDiv, true);
     sendBtn.disabled = true;
     if (chatAttachBtn) chatAttachBtn.disabled = true;
@@ -3684,6 +3770,7 @@
           messages: messagesForApi,
           strategy_mode: getStrategyMode(),
           agent_mode: getAgentMode(),
+          war_room_mode: getWarRoomMode(),
           images,
           memory_user_id: getMemoryUserId(),
         }),
@@ -3737,6 +3824,22 @@
           botDiv.classList.add('error');
           return 'error';
         }
+        if (obj.war_room_status) {
+          const chatSaveStatus = document.getElementById('chat-save-status');
+          if (chatSaveStatus) {
+            chatSaveStatus.textContent = formatWarRoomStatus(obj.war_room_status);
+          }
+          const agent = String(obj.war_room_status.agent || '').toLowerCase();
+          if (agent === 'bull' || agent === 'bear' || agent === 'referee') {
+            updateWarRoomPanel(botDiv, agent, null, { typing: true });
+          }
+        }
+        if (obj.war_room && typeof obj.war_room === 'object') {
+          const agent = String(obj.war_room.agent || '').toLowerCase();
+          if (agent === 'bull' || agent === 'bear') {
+            updateWarRoomPanel(botDiv, agent, obj.war_room.content || '', { typing: false });
+          }
+        }
         if (obj.agent_step) {
           const chatSaveStatus = document.getElementById('chat-save-status');
           if (chatSaveStatus) {
@@ -3757,6 +3860,9 @@
           }
           full += obj.c;
           botDiv.querySelector('.content').innerHTML = formatContent(full);
+          if (getWarRoomMode()) {
+            updateWarRoomPanel(botDiv, 'referee', full, { typing: false });
+          }
           scrollChatToBottom();
         }
         if (obj.done) {

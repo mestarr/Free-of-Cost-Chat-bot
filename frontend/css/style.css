@@ -868,25 +868,73 @@ button {
   width: 100%;
   max-width: 720px;
   margin: 0.75rem 1.5rem 0;
-  padding: 0.65rem 0.9rem;
+  padding: 0;
   border-radius: 10px;
   border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
   background: color-mix(in srgb, var(--accent) 7%, var(--bot-msg));
   font-size: 0.74rem;
-  line-height: 1.4;
+  line-height: 1.45;
   color: var(--muted);
-  text-align: center;
+  text-align: left;
 }
 
-.chat-disclaimer-notice strong {
+.chat-disclaimer-notice summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 0.55rem 0.9rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text);
+  text-align: center;
+  user-select: none;
+}
+
+.chat-disclaimer-notice summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-disclaimer-notice summary::before {
+  content: '▾ ';
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.chat-disclaimer-notice:not([open]) summary::before {
+  transform: rotate(-90deg);
+}
+
+.chat-disclaimer-body {
+  padding: 0 0.9rem 0.75rem;
+  max-height: min(42vh, 22rem);
+  overflow-y: auto;
+}
+
+.chat-disclaimer-lang + .chat-disclaimer-lang {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px dashed var(--border);
+}
+
+.chat-disclaimer-lang p {
+  margin: 0 0 0.55rem;
+}
+
+.chat-disclaimer-lang p:last-child {
+  margin-bottom: 0;
+}
+
+.chat-disclaimer-lang ul {
+  margin: 0.35rem 0 0.55rem;
+  padding-left: 1.15rem;
+}
+
+.chat-disclaimer-lang li {
+  margin-bottom: 0.35rem;
+}
+
+.chat-disclaimer-lang strong {
   color: var(--text);
   font-weight: 600;
-}
-
-.chat-disclaimer-notice [lang='de'] {
-  display: block;
-  margin-top: 0.2rem;
-  font-size: 0.72rem;
 }
 
 .msg-disclaimer {

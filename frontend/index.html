@@ -380,14 +380,60 @@
         <div id="chat-history-list" class="chat-history-list"></div>
       </div>
       <div class="messages-scroll">
-        <div id="chat-disclaimer" class="chat-disclaimer-notice" role="note" aria-label="Disclaimer">
-          <p>
-            <strong>Not financial advice</strong> — educational information only.
-            Crypto is high risk; AI can be wrong. You decide — DYOR.
-            Stjepan Paun is not a licensed financial adviser.
-            <span lang="de">Keine Anlageberatung.</span>
-          </p>
-        </div>
+        <details id="chat-disclaimer" class="chat-disclaimer-notice" open>
+          <summary>Disclaimer / Haftungsausschluss</summary>
+          <div class="chat-disclaimer-body">
+            <section lang="en" class="chat-disclaimer-lang">
+              <p>
+                Crypto ChatPal is provided <strong>for education and general information only</strong>.
+                It is <strong>not</strong> financial, investment, tax, or legal advice, and it is
+                <strong>not</strong> a recommendation to buy, sell, or hold any asset.
+              </p>
+              <p>
+                <strong>Stjepan Paun is not a licensed financial adviser, broker, or investment firm</strong>
+                (including under German/EU rules such as MiFID II / WpHG). Nothing in this software or its
+                AI outputs constitutes regulated investment advice.
+              </p>
+              <ul>
+                <li>Cryptocurrencies are <strong>highly risky</strong>; you can lose part or all of your capital.</li>
+                <li>AI answers can be <strong>wrong, incomplete, outdated, or misleading</strong>.</li>
+                <li>Prices, news, and trade analyses are <strong>informational only</strong>, not performance guarantees.</li>
+                <li><strong>You alone</strong> decide how to invest. Do your own research (DYOR) and consult a licensed professional when needed.</li>
+                <li><strong>Paper trading</strong> is simulated only — no real trades are executed.</li>
+              </ul>
+              <p>
+                To the fullest extent permitted by law, <strong>Stjepan Paun</strong> and contributors are
+                <strong>not liable</strong> for losses from use of this software or reliance on its outputs.
+                Use is at your <strong>own risk</strong>.
+              </p>
+            </section>
+            <section lang="de" class="chat-disclaimer-lang">
+              <p>
+                Crypto ChatPal dient <strong>ausschließlich Bildungs- und Informationszwecken</strong>.
+                Es ist <strong>keine</strong> Finanz-, Anlage-, Steuer- oder Rechtsberatung und
+                <strong>keine</strong> Empfehlung zum Kauf, Verkauf oder Halten von Vermögenswerten.
+              </p>
+              <p>
+                <strong>Stjepan Paun ist kein lizenzierter Finanzberater, kein Wertpapierhandelsunternehmen und keine Anlagevermittlung</strong>
+                (einschließlich nach deutschem/europäischem Recht, z.&nbsp;B. MiFID&nbsp;II / WpHG).
+                Nichts in dieser Software oder in KI-Ausgaben stellt regulierte Anlageberatung oder Anlagevermittlung dar.
+              </p>
+              <ul>
+                <li>Kryptowährungen und digitale Assets sind <strong>hoch riskant</strong>. Sie können einen Teil oder Ihr gesamtes eingesetztes Kapital verlieren.</li>
+                <li>KI-Antworten können <strong>falsch, unvollständig, veraltet oder irreführend</strong> sein — auch wenn sie überzeugend klingen.</li>
+                <li>Live-Preise, Nachrichten, Stimmungswerte, Paper-Trading-Ergebnisse und „Trade-Analysen“ sind <strong>nur Informationswerkzeuge</strong>, keine Garantie für künftige Performance.</li>
+                <li><strong>Sie allein</strong> entscheiden, ob und wie Sie investieren. Recherchieren Sie selbst (DYOR) und holen Sie sich bei Bedarf <strong>qualifizierte, lizenzierte Beratung</strong> in Ihrem Land, bevor Sie finanzielle Entscheidungen treffen.</li>
+                <li><strong>Paper Trading</strong> in der App ist nur simuliert — es werden keine echten Trades ausgeführt.</li>
+              </ul>
+              <p>
+                <strong>Haftungsbeschränkung:</strong> Soweit gesetzlich zulässig haften <strong>Stjepan Paun</strong> und Mitwirkende
+                <strong>nicht</strong> für direkte oder indirekte Verluste, Schäden oder Kosten aus der Nutzung dieser Software
+                oder aus dem Vertrauen auf deren Ausgaben — einschließlich Handels- oder Anlageverlusten.
+                Die Nutzung von Crypto ChatPal erfolgt auf <strong>eigenes Risiko</strong>.
+              </p>
+            </section>
+          </div>
+        </details>
         <div id="messages"></div>
       </div>
       <div id="input-area">

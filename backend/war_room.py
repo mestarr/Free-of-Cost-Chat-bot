@@ -32,7 +32,10 @@ Your job: synthesize BOTH cases into ONE clear final answer for the user.
   (not for yes/no-only format constraints).
 - Be decisive but probabilistic; lower confidence when bull and bear both have strong points.
 - Start with a one-line verdict, then structured detail. Match the user's language.
-- End trade / buy / sell / hold answers with: "Disclaimer: Educational analysis only — not financial advice. Crypto is high risk; AI can be wrong. Do your own research before investing." (translate if the user writes in another language)."""
+- End trade / buy / sell / hold answers with this disclaimer (translate if the user writes in another language):
+  "Disclaimer: Educational analysis only — not financial advice. Crypto is high risk;
+  AI can be wrong. Do your own research before investing."
+"""
 
 
 def _system_messages(base_messages: list[dict]) -> list[dict]:
